@@ -258,6 +258,34 @@ export function installViews({
   // Views apply one at a time, in the order they arrive.
   let queue = ready;
   const onMessage = (event) => {
+    // Acao direta (ex: ESP/ST7789 por voz). O app aceita da propria window
+    // tambem, pois quem dirige o globo roda no mesmo contexto (Puppeteer).
+    if (event.data?.type === 'gev:action') {
+      const { id = null, name, args = {} } = event.data;
+      const replyOrigin =
+        isEmbeddedInline() || !event.origin || event.origin === 'null'
+          ? '*'
+          : event.origin;
+      queue = queue.then(async () => {
+        if (signal?.aborted) return;
+        let result = null;
+        try {
+          result = await run(name, args);
+        } catch (error) {
+          result = { ok: false, error: error?.message || String(error) };
+        }
+        post(
+          {
+            type: 'gev:action-applied',
+            id,
+            name,
+            ok: result?.ok !== false,
+          },
+          replyOrigin,
+        );
+      });
+      return;
+    }
     if (event.source !== peer || event.data?.type !== EMBED_VIEW_MESSAGE)
       return;
     const { id = null } = event.data;
