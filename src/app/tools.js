@@ -4,7 +4,7 @@ import { initDrawTool } from '../annotations/drawTool.js';
 import { initImageryBoxTool } from '../ui/imageryBoxTool.js';
 import { createRecentImageryPanel } from '../ui/recentImagery.js';
 import { initGevVoiceCommands } from '../voice/gevRealtime.js';
-import { installViews, isEmbeddedInline } from './embed.js';
+import { installViews, isEmbeddedInline, isEmbedded } from './embed.js';
 import { installScopeMask, destroyScopeMask } from '../scopeMask.js';
 import {
   installRenderGovernor,
@@ -101,8 +101,12 @@ export function createApplicationTools({
   installRenderGovernor(viewer);
 
   // Install the explicit scope mask used by the DISPLAY controls.
-  installScopeMask(viewer);
-  defer(() => destroyScopeMask());
+  // No modo embed (ESP/ST7789, ?embed=1), o scope mask NAO e instalado:
+  // a vinheta circular (keyhole) escurece as bordas e atrapalha o display.
+  if (!isEmbedded()) {
+    installScopeMask(viewer);
+    defer(() => destroyScopeMask());
+  }
 
   // The follow camera recomputes the tracked target's dead-reckon position
   // every frame — tracking anything is a per-frame animation. (perf wave 2)
