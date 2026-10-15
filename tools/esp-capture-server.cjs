@@ -164,10 +164,43 @@ function broadcast() {
 }
 
 // ----------------------------- websocket -----------------------------
-const server = http.createServer((_, res) => {
+const server = http.createServer(async (req, res) => {
+  // POST /action -> executa acoes no globo (vindo do voice-server)
+  if (req.method === "POST" && req.url === "/action") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const { actions } = JSON.parse(body || "{}");
+        const applied = await applyActions(actions || []);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, applied }));
+        console.log("[action] aplicadas:", JSON.stringify(actions));
+      } catch (e) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
+  }
   res.writeHead(200, { "Content-Type": "text/plain" });
   res.end(`gev->ST7789 frames=${frameCount} clients=${clients.size} cap=${captureMs}ms\n`);
 });
+
+// repassa as acoes pro app via postMessage (mesma via do gev:view do embed)
+async function applyActions(actions) {
+  if (!page) return 0;
+  return page.evaluate((acts) => {
+    let n = 0;
+    for (const a of acts) {
+      // o app escuta 'gev:action' com { name, args } (ver src/voice/control.js)
+      window.postMessage({ type: "gev:action", name: a.name, args: a.args || {} }, "*");
+      n++;
+    }
+    return n;
+  }, actions);
+}
+
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
   clients.add(ws);
