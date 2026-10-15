@@ -21,3 +21,13 @@ qa-artifacts/
 3d-models/
 pinokio/ENVIRONMENT
 pinokio/.installed
+
+# ESP32 / ST7789 (God's Eye no display)
+*.rgb
+test-*.cjs
+capture_*.png
+esp_frame.*
+globe_test.*
+rgb332_check.png
+jpeg_array.txt
+teste_frame.jpg

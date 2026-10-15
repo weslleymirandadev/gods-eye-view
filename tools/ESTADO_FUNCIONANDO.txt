@@ -1,0 +1,111 @@
+======================================================================
+ GOD'S EYE VIEW -> ST7789 no ESP32-S3  |  ESTADO QUE FUNCIONA
+======================================================================
+
+STATUS: globo renderizando no display (5-7fps). Meta: 24fps.
+
+----------------------------------------------------------------------
+ARQUITETURA
+----------------------------------------------------------------------
+[God's Eye View / Cesium]
+   -> Puppeteer HEADED (headless:false = usa GPU Intel HD 4600; swiftshader
+      puro comia 95% da CPU)
+   -> viewport 240x240, URL ?embed=1 (esconde HUD)
+   -> screenshot JPEG a ~15fps (60-75ms/frame)
+   -> sharp -> RGB565 little-endian
+   -> WebSocket :8082 (chunks de 8KB)
+[ESP32-S3] -> drawRGBBitmap -> ST7789
+
+----------------------------------------------------------------------
+RODAR (3 passos)
+----------------------------------------------------------------------
+1) App:      cd ~/Documents/projetos/gods-eye-view && npx vite
+             (sobe em http://localhost:4173)
+
+2) Capture:  node tools/esp-capture-server.cjs --port 8082 --size 240
+             Opcoes: --skip N (envia 1 a cada N frames)
+                     --layers flights,ais-live-vessels,satellites
+                     --lat/--lon/--alt (camera)
+             Abre uma JANELA do Chrome com o globo. NAO fechar.
+
+3) ESP:      flashar display/display.ino
+             Board: ESP32S3 Dev Module | FlashSize=16M | FlashMode=QIO
+             Partition=Default | PSRAM=Disabled | 240MHz
+             SPI a 60MHz (SPI_CLOCK_HZ)
+
+----------------------------------------------------------------------
+FIACAO (comprovada)
+----------------------------------------------------------------------
+ST7789        ESP32-S3
+SCL (CLK)  -> GPIO 42
+SDA (MOSI) -> GPIO 41
+DC         -> GPIO 38
+RES (RST)  -> GPIO 37
+CS         -> (nao ligado; modulo tem CS interno)
+BLK        -> GPIO 8 (ou 3V3)
+VCC        -> 3V3   GND -> GND
+
+----------------------------------------------------------------------
+PROTOCOLO WEBSOCKET (ESP <- servidor)
+----------------------------------------------------------------------
+byte[0] = 0x00 -> manifest JSON {width,height,format:"rgb565le",fps}
+byte[0] = 0x03 -> chunk: [0x03][off0][off1][off2][off3][dados...]
+                 offset 32-bit little-endian
+                 chunk = 8192 bytes
+                 O ESP monta no frameBuf; desenha quando off+n >= total
+
+!!! PITFALL CRITICO: offset PRECISA de 4 bytes !!!
+O frame tem 115200 bytes > 65535. Com offset de 2 bytes ele estourava
+e voltava pra 0 a partir do chunk #9 -> frame embaralhado -> tela preta.
+
+----------------------------------------------------------------------
+PITFALLS APRENDIDOS (todos custaram tempo)
+----------------------------------------------------------------------
+1. Adafruit_ST7789(cs,dc,mosi,sclk,rst) => SOFTWARE SPI (bit-bang)!
+   SEMPRE usar Adafruit_ST7789(&SPI, cs, dc, rst) => HARDWARE SPI.
+   (bit-bang dava 1687ms/frame; hardware deu 126ms; 60MHz melhor ainda)
+
+2. WebSockets.h da lib Markus Sattler define WEBSOCKETS_MAX_DATA_SIZE
+   (15*1024) SEM #ifndef -> sobrescreve o define do sketch. Corrigido
+   localmente adicionando #ifndef. (Com chunks de 8KB o default 15KB
+   ja basta, mas o header estava forcando.)
+
+3. Puppeteer headless + swiftshader = 95% CPU. headless:false usa a GPU.
+
+4. Cesium credits/watermark: esconder via addStyleTag com
+   #cesium-credits, .cesium-credit-* { display:none }.
+
+5. View do God's Eye via postMessage {type:'gev:view', id, view}
+   view = { camera:{lat,lon,altitude_m,heading_deg,pitch_deg},
+            layers:[], style, map, follow }
+   layers vazio = nenhum data layer (globo limpo).
+
+6. TFT_eSPI trava no tft.init() no core esp32 3.x (registradores SPI
+   crus incompativeis). Por isso usamos Adafruit.
+
+7. Build cache do IDE as vezes nao detecta mudancas -> Sketch > Clean
+   Build Folder.
+
+8. Compilacao travada no IDE = arduino-cli.exe orfao segurando lock
+   (matar o processo arduino-cli.exe).
+
+----------------------------------------------------------------------
+PROXIMO PASSO (em andamento): 24fps
+----------------------------------------------------------------------
+Gargalo = drawRGBBitmap do Adafruit (writePixels do core roda em blocos
+de 64 bytes, SEM DMA). 115200 B -> ~1800 iteracoes de registro/frame.
+
+Caminho: esp_lcd (driver SPI Master do IDF, com DMA).
+Teste isolado criado: ~/Documents/Arduino/esplcd/esplcd.ino
+  - spi_bus_initialize(SPI2_HOST, ..., SPI_DMA_CH_AUTO)
+  - esp_lcd_new_panel_io_spi (trans_queue_depth=10)
+  - esp_lcd_new_panel_st7789
+  - esp_lcd_panel_draw_bitmap (transferencia com DMA)
+Se o teste der ~24fps, migrar o display.ino pra esp_lcd.
+
+----------------------------------------------------------------------
+BACKUPS
+----------------------------------------------------------------------
+minimal/backup/          -> driver base 60MHz (base comprovada)
+display/backup/          -> display.ino FUNCIONANDO (globo + stream)
+tools/backup/            -> capture-server FUNCIONANDO
