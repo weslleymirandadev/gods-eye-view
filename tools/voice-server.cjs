@@ -18,6 +18,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
 const { execFileSync } = require("child_process");
 const { WebSocketServer } = require("ws");
 
@@ -140,8 +141,32 @@ function writeWav(pcmPath, wavPath) {
 fs.mkdirSync(WORK, { recursive: true });
 const apiKey = loadKey();
 
-const wss = new WebSocketServer({ port: PORT });
-console.log(`[voice] servindo em ws://0.0.0.0:${PORT}  modelo=${MODEL}`);
+// estado da ultima gravacao (exposto em GET /mic)
+let lastMic = { text: null, at: null, bytes: 0, actions: null, error: null };
+
+const server = http.createServer((req, res) => {
+  const url = (req.url || "").split("?")[0];
+  // GET /mic -> ultima transcricao (ou null) + estado
+  if (req.method === "GET" && url === "/mic") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(lastMic));
+    return;
+  }
+  // POST /mic/reset -> limpa
+  if (req.method === "POST" && url === "/mic/reset") {
+    lastMic = { text: null, at: null, bytes: 0, actions: null, error: null };
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end(`voice-server up. GET /mic para a ultima transcricao.\n`);
+});
+
+const wss = new WebSocketServer({ server });
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`[voice] ws://0.0.0.0:${PORT}  (HTTP: GET /mic)  modelo=${MODEL}`);
+});
 
 wss.on("connection", (ws) => {
   console.log("[voice] ESP conectado");
@@ -168,13 +193,16 @@ wss.on("connection", (ws) => {
       try {
         const text = transcribe(wavPath);
         console.log(`[voice] STT: "${text}"`);
+        lastMic = { text: text || null, at: Date.now(), bytes: audio.length, actions: null, error: null };
         if (!text) { ws.send(JSON.stringify({ ok: false, reason: "sem fala" })); return; }
         const { calls } = await pickAction(text, apiKey);
         console.log("[voice] acoes:", JSON.stringify(calls));
+        lastMic.actions = calls;
         const res = await runActions(calls);
         ws.send(JSON.stringify({ ok: true, text, actions: calls, result: res }));
       } catch (e) {
         console.error("[voice] erro:", e.message);
+        lastMic = { text: null, at: Date.now(), bytes: audio.length, actions: null, error: e.message };
         ws.send(JSON.stringify({ ok: false, error: e.message }));
       }
     }
