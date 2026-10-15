@@ -4,16 +4,20 @@
  * Fluxo:
  *   1. ESP conecta no WebSocket :8083 e manda audio PCM (16kHz, 16-bit mono)
  *      enquanto o botao fisico esta apertado.
- *   2. Ao soltar (mensagem 0x02 = fim), salva um WAV.
+ *   2. Ao soltar (mensagem 0x03 = fim), salva um WAV em captures/.
  *   3. faster-whisper transcreve (local, gratis).
- *   4. OpenRouter (modelo free) escolhe a acao com function calling,
- *      usando os schemas do God's Eye.
- *   5. A acao vai pro capture-server, que a repassa ao browser via postMessage
- *      (a mesma via do ?embed=1), e o globo se move.
+ *   4. OpenRouter (modelo free) escolhe a acao com function calling.
+ *   5. A acao vai pro capture-server, que a repassa ao browser via postMessage.
+ *
+ * HTTP:
+ *   GET  /              -> status
+ *   GET  /mic           -> pagina HTML com os ultimos 5 audios + transcricao
+ *   GET  /mic/audio/:id -> o WAV gravado
+ *   GET  /mic.json      -> ultimos 5 (json)
+ *   POST /mic/reset     -> limpa a lista
  *
  * Uso:
- *   node tools/voice-server.cjs             (porta 8083)
- *   node tools/voice-server.cjs --port 8083 --model nvidia/nemotron-3.5-super-vl:free
+ *   node tools/voice-server.cjs --port 8083
  */
 
 const fs = require("fs");
@@ -31,11 +35,14 @@ const PORT = parseInt(arg("port", "8083"), 10);
 const MODEL = arg("model", "nvidia/nemotron-3.5-super-vl:free");
 const CAPTURE_URL = arg("capture", "http://127.0.0.1:8082");
 const PY = arg("python", ".venv/Scripts/python.exe");
-const WORK = path.join(__dirname, "..", ".voice-tmp");
+const ROOT = path.join(__dirname, "..");
+const WORK = path.join(ROOT, ".voice-tmp");
+const CAPTURES = path.join(ROOT, "captures");
+const KEEP = 5;                       // ultimos N audios
 
 // ----------------------------- key -----------------------------
 function loadKey() {
-  const envPath = path.join(__dirname, "..", ".env");
+  const envPath = path.join(ROOT, ".env");
   if (!fs.existsSync(envPath)) throw new Error(".env com OPENROUTER_API_KEY nao encontrado");
   const m = fs.readFileSync(envPath, "utf-8").match(/OPENROUTER_API_KEY\s*=\s*(\S+)/);
   if (!m) throw new Error("OPENROUTER_API_KEY ausente no .env");
@@ -43,7 +50,6 @@ function loadKey() {
 }
 
 // --------------------- God's Eye tool schemas ---------------------
-// Subset das acoes de src/voice/actionSchemas.js mais uteis por voz.
 const TOOLS = [
   { type: "function", function: { name: "fly_to_location",
     description: "Voa a camera do globo ate um lugar. Use query para nomes livres ou locationId para as cidades conhecidas.",
@@ -87,7 +93,7 @@ algo, use set_layer_visibility. Responda SEMPRE chamando uma ferramenta quando f
 // ----------------------------- STT -----------------------------
 const STT_SCRIPT = path.join(__dirname, "_stt.py");
 function transcribe(wavPath) {
-  const out = execFileSync(PY, [STT_SCRIPT, wavPath], { encoding: "utf-8", timeout: 60000 });
+  const out = execFileSync(PY, [STT_SCRIPT, wavPath], { encoding: "utf-8", timeout: 120000 });
   return out.trim();
 }
 
@@ -125,8 +131,7 @@ async function runActions(calls) {
 }
 
 // ----------------------------- wav -----------------------------
-function writeWav(pcmPath, wavPath) {
-  const pcm = fs.readFileSync(pcmPath);
+function buildWav(pcm) {
   const sr = 16000, ch = 1, bps = 16;
   const hdr = Buffer.alloc(44);
   hdr.write("RIFF", 0); hdr.writeUInt32LE(36 + pcm.length, 4); hdr.write("WAVE", 8);
@@ -134,75 +139,183 @@ function writeWav(pcmPath, wavPath) {
   hdr.writeUInt16LE(ch, 22); hdr.writeUInt32LE(sr, 24);
   hdr.writeUInt32LE(sr * ch * bps / 8, 28); hdr.writeUInt16LE(ch * bps / 8, 32);
   hdr.writeUInt16LE(bps, 34); hdr.write("data", 36); hdr.writeUInt32LE(pcm.length, 40);
-  fs.writeFileSync(wavPath, Buffer.concat([hdr, pcm]));
+  return Buffer.concat([hdr, pcm]);
+}
+
+// ------------------- lista dos ultimos audios -------------------
+/** @type {{id:string,file:string,at:number,bytes:number,text:string|null,actions:any,error:string|null}[]} */
+const recent = [];
+
+function loadRecent() {
+  try {
+    const idx = path.join(CAPTURES, "index.json");
+    if (fs.existsSync(idx)) {
+      const arr = JSON.parse(fs.readFileSync(idx, "utf-8"));
+      recent.push(...arr.slice(0, KEEP));
+    }
+  } catch (e) { console.error("[voice] index:", e.message); }
+}
+function saveRecent() {
+  try {
+    fs.writeFileSync(path.join(CAPTURES, "index.json"), JSON.stringify(recent.slice(0, KEEP), null, 0));
+  } catch (e) { console.error("[voice] index save:", e.message); }
+}
+function pruneCaptures() {
+  // apaga os WAVs alem dos KEEP mais recentes
+  const keepFiles = new Set(recent.slice(0, KEEP).map((r) => r.file));
+  for (const f of fs.readdirSync(CAPTURES)) {
+    if (f.endsWith(".wav") && !keepFiles.has(f)) {
+      try { fs.unlinkSync(path.join(CAPTURES, f)); } catch {}
+    }
+  }
+}
+
+// ----------------------------- HTML -----------------------------
+function page() {
+  const rows = recent.map((r) => `
+    <article class="card">
+      <div class="head">
+        <span class="time">${new Date(r.at).toLocaleTimeString("pt-BR")}</span>
+        <span class="meta">${(r.bytes / 1024).toFixed(1)} KB</span>
+      </div>
+      <audio controls preload="none" src="/mic/audio/${r.id}"></audio>
+      <p class="text">${r.text ? escapeHtml(r.text) : (r.error ? `<em class="err">erro: ${escapeHtml(r.error)}</em>` : "<em>sem transcricao</em>")}</p>
+      ${r.actions && r.actions.length ? `<pre class="acts">${escapeHtml(JSON.stringify(r.actions))}</pre>` : ""}
+    </article>`).join("");
+  return `<!doctype html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Voz - God's Eye</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; background:#0b0d10; color:#e6e9ef;
+         font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  h1 { font-size:18px; margin:0 0 4px; font-weight:600; }
+  .sub { color:#8b93a1; font-size:13px; margin-bottom:20px; }
+  .grid { display:grid; gap:12px; max-width:720px; }
+  .card { background:#141821; border:1px solid #232936; border-radius:10px; padding:14px; }
+  .head { display:flex; justify-content:space-between; font-size:12px; color:#8b93a1; margin-bottom:8px; }
+  audio { width:100%; height:36px; }
+  .text { margin:10px 0 0; font-size:15px; }
+  .text em { color:#6b7280; }
+  .err { color:#f87171; }
+  .acts { margin:8px 0 0; padding:8px; background:#0b0d10; border-radius:6px;
+          font-size:12px; color:#93c5fd; overflow-x:auto; white-space:pre-wrap; }
+  .empty { color:#6b7280; padding:24px; text-align:center; border:1px dashed #232936; border-radius:10px; }
+</style></head>
+<body>
+  <h1>Microfone &mdash; &uacute;ltimos ${KEEP} &aacute;udios</h1>
+  <div class="sub">God's Eye &middot; INMP441 &middot; atualiza sozinho a cada 3s</div>
+  <div class="grid" id="grid">${rows || '<div class="empty">Nenhuma gravacao ainda. Segura o botao e fala.</div>'}</div>
+  <script>
+    // auto-refresh: recarrega quando chega gravacao nova
+    let last = ${recent.length ? recent[0].at : 0};
+    setInterval(async () => {
+      try {
+        const r = await fetch('/mic.json');
+        const arr = await r.json();
+        const newest = arr.length ? arr[0].at : 0;
+        if (newest !== last) location.reload();
+      } catch {}
+    }, 3000);
+  </script>
+</body></html>`;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
 
 // ----------------------------- server -----------------------------
 fs.mkdirSync(WORK, { recursive: true });
+fs.mkdirSync(CAPTURES, { recursive: true });
+loadRecent();
 const apiKey = loadKey();
-
-// estado da ultima gravacao (exposto em GET /mic)
-let lastMic = { text: null, at: null, bytes: 0, actions: null, error: null };
 
 const server = http.createServer((req, res) => {
   const url = (req.url || "").split("?")[0];
-  // GET /mic -> ultima transcricao (ou null) + estado
-  if (req.method === "GET" && url === "/mic") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(lastMic));
+
+  if (req.method === "GET" && (url === "/mic" || url === "/mic/")) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(page());
     return;
   }
-  // POST /mic/reset -> limpa
+  if (req.method === "GET" && url === "/mic.json") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(recent));
+    return;
+  }
+  const m = url.match(/^\/mic\/audio\/([A-Za-z0-9_-]+)$/);
+  if (req.method === "GET" && m) {
+    const item = recent.find((r) => r.id === m[1]);
+    const f = item && path.join(CAPTURES, item.file);
+    if (f && fs.existsSync(f)) {
+      const buf = fs.readFileSync(f);
+      res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": buf.length });
+      res.end(buf);
+    } else {
+      res.writeHead(404); res.end("nao encontrado");
+    }
+    return;
+  }
   if (req.method === "POST" && url === "/mic/reset") {
-    lastMic = { text: null, at: null, bytes: 0, actions: null, error: null };
+    recent.length = 0;
+    pruneCaptures(); saveRecent();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
     return;
   }
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end(`voice-server up. GET /mic para a ultima transcricao.\n`);
+  res.end(`voice-server up. /mic -> ultimos ${KEEP} audios.\n`);
 });
 
 const wss = new WebSocketServer({ server });
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[voice] ws://0.0.0.0:${PORT}  (HTTP: GET /mic)  modelo=${MODEL}`);
+  console.log(`[voice] ws://0.0.0.0:${PORT}  (HTTP: /mic)  modelo=${MODEL}`);
 });
 
 wss.on("connection", (ws) => {
   console.log("[voice] ESP conectado");
-  let pcm = null;          // acumula audio da fala atual
-  const pcmPath = path.join(WORK, "rec.pcm");
+  let pcm = null;
 
   ws.on("message", async (data) => {
     if (data.length < 1) return;
     const type = data[0];
 
-    if (type === 0x01) {           // inicio de gravacao (botao apertado)
+    if (type === 0x01) {
       pcm = [];
       console.log("[voice] gravando...");
-    } else if (type === 0x02) {    // chunk de audio
+    } else if (type === 0x02) {
       if (pcm) pcm.push(data.subarray(1));
-    } else if (type === 0x03) {    // fim (botao solto)
+    } else if (type === 0x03) {
       if (!pcm || !pcm.length) { ws.send(JSON.stringify({ ok: false, reason: "sem audio" })); return; }
       const audio = Buffer.concat(pcm); pcm = null;
-      fs.writeFileSync(pcmPath, audio);
-      const wavPath = path.join(WORK, "rec.wav");
-      writeWav(pcmPath, wavPath);
-      console.log(`[voice] audio: ${audio.length} bytes`);
+
+      // salva o WAV e registra na lista
+      const id = Date.now().toString(36);
+      const file = `rec-${id}.wav`;
+      const wavPath = path.join(CAPTURES, file);
+      fs.writeFileSync(wavPath, buildWav(audio));
+      const entry = { id, file, at: Date.now(), bytes: audio.length, text: null, actions: null, error: null };
+      recent.unshift(entry);
+      recent.splice(KEEP); pruneCaptures(); saveRecent();
+      console.log(`[voice] audio: ${audio.length} bytes -> ${file}`);
 
       try {
         const text = transcribe(wavPath);
         console.log(`[voice] STT: "${text}"`);
-        lastMic = { text: text || null, at: Date.now(), bytes: audio.length, actions: null, error: null };
-        if (!text) { ws.send(JSON.stringify({ ok: false, reason: "sem fala" })); return; }
+        entry.text = text || null;
+        if (!text) { saveRecent(); ws.send(JSON.stringify({ ok: false, reason: "sem fala" })); return; }
         const { calls } = await pickAction(text, apiKey);
         console.log("[voice] acoes:", JSON.stringify(calls));
-        lastMic.actions = calls;
+        entry.actions = calls;
         const res = await runActions(calls);
+        saveRecent();
         ws.send(JSON.stringify({ ok: true, text, actions: calls, result: res }));
       } catch (e) {
         console.error("[voice] erro:", e.message);
-        lastMic = { text: null, at: Date.now(), bytes: audio.length, actions: null, error: e.message };
+        entry.error = e.message;
+        saveRecent();
         ws.send(JSON.stringify({ ok: false, error: e.message }));
       }
     }

@@ -31,3 +31,9 @@ globe_test.*
 rgb332_check.png
 jpeg_array.txt
 teste_frame.jpg
+
+# Voz (audios gravados)
+captures/
+.voice-tmp/
+.venv/
+tools/_fake-mic.cjs
