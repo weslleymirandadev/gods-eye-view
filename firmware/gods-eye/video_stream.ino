@@ -116,7 +116,7 @@ void initVideoStream() {
   }
   Serial.printf("[buf] jpg=%p out=%p heap=%u\n", jpgBuf, outBuf, (unsigned)ESP.getFreeHeap());
 
-  wsVideo.begin(WS_HOST, WS_VIDEO_PORT, "/");
+  wsVideo.begin(WS_HOST, WS_VIDEO_PORT, "/esp");
   wsVideo.onEvent(onVideoEvent);
   wsVideo.setReconnectInterval(2000);
 }
