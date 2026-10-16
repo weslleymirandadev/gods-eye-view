@@ -35,5 +35,13 @@
   <!-- gev:template hud-loading -->
 
   <script type="module" src="/src/main.js"></script>
+
+  <!-- Modo painel: se a URL tem ?panel=1, este navegador vira a fonte do
+       display (captura o proprio canvas e manda pro ESP32 via :8082). -->
+  <script type="module">
+    if (new URLSearchParams(location.search).get('panel') === '1') {
+      import('/src/panelMode.js');
+    }
+  </script>
 </body>
 </html>
