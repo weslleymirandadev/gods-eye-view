@@ -25,9 +25,11 @@ export const BROWSER_CSP = [
   "script-src 'self' 'unsafe-eval' blob: https://www.youtube.com https://connect.facebook.net https://platform.twitter.com https://maps.googleapis.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
-  "img-src 'self' data: blob: https:",
+  // Bing (Cesium Ion) serve os tiles de imagem por http:// — sem estes
+  // dominios o basemap bing-aerial / bing-labels nao carrega (CSP bloqueia).
+  "img-src 'self' data: blob: https: http://*.tiles.virtualearth.net http://*.virtualearth.net",
   "media-src 'self' blob: https:",
-  "connect-src 'self' blob: data: https: wss: ws:",
+  "connect-src 'self' blob: data: https: http://*.tiles.virtualearth.net http://*.virtualearth.net wss: ws:",
   "worker-src 'self' blob:",
   "child-src 'self' blob:",
   // The same media's players and posts, which load in frames.
