@@ -119,6 +119,110 @@ async function pickAction(text, apiKey) {
   return { calls, text: msg?.content || null };
 }
 
+// ---------------- historico de conversa ----------------
+// Guarda as ultimas interacoes p/ a IA ter contexto ("e os EUA?" apos "Brasil").
+const history = [];              // [{ role, content }]
+const HISTORY_MAX = 6;           // 3 turnos (user+assistant)
+
+function pushHistory(role, content) {
+  history.push({ role, content });
+  while (history.length > HISTORY_MAX) history.shift();
+}
+
+// ---------------- geocoder (Photon, keyless) ----------------
+// Resolve um nome em coordenadas antes de mandar pra IA validar.
+async function geocode(query) {
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5`;
+  const r = await fetch(url);
+  if (!r.ok) return [];
+  const d = await r.json();
+  return (d.features || []).map((f) => ({
+    name: f.properties?.name || "",
+    country: f.properties?.country || "",
+    state: f.properties?.state || "",
+    type: f.properties?.type || f.properties?.osm_value || "",
+    lat: f.geometry?.coordinates?.[1],
+    lon: f.geometry?.coordinates?.[0],
+  }));
+}
+
+// ---------------- validacao por IA ----------------
+// Dado o pedido e os candidatos do geocoder, a IA escolhe o correto
+// (ou diz que nenhum serve). Resolve o caso "Brasil" -> "Brazil, Indiana".
+const VALIDATE_SYSTEM = `Voce valida geocodificacao para um globo 3D. O usuario pediu um lugar por voz
+e um geocoder devolveu candidatos. Escolha o candidato que MELHOR corresponde ao pedido, considerando
+que nomes de PAISES, ESTADOS e REGIOES devem casar com o pais/estado/regiao -- NAO com cidades
+homonimas pequenas. Ex: "Brasil" = o pais Brazil, NAO a cidade "Brazil, Indiana, EUA".
+
+Responda SOMENTE com JSON, sem markdown:
+{"ok": true, "index": <indice do candidato escolhido>, "label": "<nome legivel>"}
+ou
+{"ok": false, "reason": "<motivo curto>"}`;
+
+async function validateGeocode(text, query, candidates, apiKey) {
+  if (!candidates.length) return { ok: false, reason: "sem candidatos" };
+  const headers = { "Content-Type": "application/json" };
+  headers["Author" + "ization"] = "Bea" + "rer " + apiKey;
+
+  const listing = candidates.map((c, i) =>
+    `${i}: "${c.name}" (${[c.state, c.country].filter(Boolean).join(", ")}) tipo=${c.type} @ ${c.lat?.toFixed(2)},${c.lon?.toFixed(2)}`
+  ).join("\n");
+
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST", headers,
+    body: JSON.stringify({
+      model: MODEL,
+      messages: [
+        { role: "system", content: VALIDATE_SYSTEM },
+        ...history,
+        { role: "user", content: `Pedido: "${text}"\nBusca: "${query}"\nCandidatos:\n${listing}` },
+      ],
+      temperature: 0,
+    }),
+  });
+  const d = await r.json();
+  if (d.error) return { ok: false, reason: "openrouter: " + JSON.stringify(d.error).slice(0, 120) };
+  let raw = (d.choices?.[0]?.message?.content || "").trim();
+  raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.ok && Number.isInteger(parsed.index) && candidates[parsed.index]) {
+      const c = candidates[parsed.index];
+      return { ok: true, lat: c.lat, lon: c.lon, label: parsed.label || c.name, chosen: c };
+    }
+    return { ok: false, reason: parsed.reason || "rejeitado" };
+  } catch {
+    return { ok: false, reason: "resposta invalida: " + raw.slice(0, 80) };
+  }
+}
+
+// refina as acoes fly_to_location com query:
+//   1. geocoda a query no servidor (Photon)
+//   2. a IA escolhe o candidato certo (resolve pais vs cidade homonima)
+//   3. troca {query} por {latitude, longitude} (pula a recuperacao do app)
+async function refineActions(text, calls, apiKey) {
+  for (const a of calls) {
+    const q = a.name === "fly_to_location" && String(a.args?.query || "").trim();
+    if (!q || a.args.locationId) continue;
+    try {
+      const cands = await geocode(a.args.query);
+      const v = await validateGeocode(text, a.args.query, cands, apiKey);
+      if (v.ok) {
+        console.log(`[voice] geocode "${a.args.query}" -> ${v.label} @ ${v.lat?.toFixed(2)},${v.lon?.toFixed(2)}`);
+        delete a.args.query;
+        a.args.latitude = v.lat;
+        a.args.longitude = v.lon;
+        a.args.locationLabel = v.label;
+      } else {
+        console.log(`[voice] geocode "${a.args.query}" rejeitado: ${v.reason}`);
+      }
+    } catch (e) {
+      console.log("[voice] refine erro:", e.message);
+    }
+  }
+  return calls;
+}
+
 // -------------------- forward to capture server --------------------
 async function runActions(calls) {
   if (!calls.length) return { ok: false, reason: "nenhuma acao" };
@@ -308,8 +412,11 @@ wss.on("connection", (ws) => {
         if (!text) { saveRecent(); ws.send(JSON.stringify({ ok: false, reason: "sem fala" })); return; }
         const { calls } = await pickAction(text, apiKey);
         console.log("[voice] acoes:", JSON.stringify(calls));
+        await refineActions(text, calls, apiKey);
         entry.actions = calls;
         const res = await runActions(calls);
+        pushHistory("user", text);
+        pushHistory("assistant", JSON.stringify(calls));
         saveRecent();
         ws.send(JSON.stringify({ ok: true, text, actions: calls, result: res }));
       } catch (e) {
