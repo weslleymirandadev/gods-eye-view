@@ -50,9 +50,22 @@ function loadKey() {
 }
 
 // --------------------- God's Eye tool schemas ---------------------
+// Os enums espelham src/voice/actionSchemas.js (o app rejeita valor fora do enum).
+
+// As 28 camadas de dados do God's Eye (src/voice/layerManifest.js)
+const LAYER_IDS = [
+  "flights", "military", "local-adsb", "ais-live-vessels", "satellites",
+  "rocket-launches", "earthquakes", "local-firms", "fire-perimeters",
+  "weather-cyclones", "weather-radar", "weather-satellite", "weather-lightning",
+  "wind", "traffic", "transit", "bikeshare", "cctv", "alpr-cameras", "radio",
+  "street-level", "recent-imagery", "directions", "military-installations",
+  "local-datacenters", "local-dams", "telegeography-submarine-cables",
+  "military-awareness",
+];
+
 const TOOLS = [
   { type: "function", function: { name: "fly_to_location",
-    description: "Voa a camera do globo ate um lugar. Use query para nomes livres ou locationId para as cidades conhecidas.",
+    description: "Voa a camera do globo ate um lugar. Use query para nomes livres (paises, cidades, regioes).",
     parameters: { type: "object", properties: {
       locationId: { type: "string", enum: ["austin","sf","nyc","tokyo","london","paris","dubai","dc"] },
       query: { type: "string" },
@@ -70,25 +83,60 @@ const TOOLS = [
       amount: { type: "number" },
     }, required: ["direction"] } } },
   { type: "function", function: { name: "set_layer_visibility",
-    description: "Liga ou desliga uma camada de dados no globo.",
+    description: "Liga ou desliga uma camada de dados no globo (avioes, barcos, cameras, clima, etc).",
     parameters: { type: "object", properties: {
-      layerId: { type: "string", description: "ex: flights, satellites, ais-live-vessels, earthquakes, cctv" },
-      visible: { type: "boolean" },
-    }, required: ["layerId","visible"] } } },
-  { type: "function", function: { name: "select_nearest_aircraft",
-    description: "Seleciona a aeronave mais proxima da camera.",
-    parameters: { type: "object", properties: { query: { type: "string" } } } } },
-  { type: "function", function: { name: "track_entity",
-    description: "Passa a seguir (trackear) uma entidade.",
-    parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
+      layerId: { type: "string", enum: LAYER_IDS },
+      enabled: { type: "boolean" },
+    }, required: ["layerId","enabled"] } } },
   { type: "function", function: { name: "set_visual_style",
     description: "Troca o estilo visual do globo.",
-    parameters: { type: "object", properties: { styleId: { type: "string" } }, required: ["styleId"] } } },
+    parameters: { type: "object", properties: {
+      style: { type: "string", enum: ["normal","retro","surveillance","thermal","anime","noir","snow"] },
+    }, required: ["style"] } } },
+  { type: "function", function: { name: "set_map_stack",
+    description: "Troca o mapa de base (imagem de satelite, ruas, rotulos/fronteiras).",
+    parameters: { type: "object", properties: {
+      stack: { type: "string", enum: ["photoreal","bing-aerial","bing-labels","esri-imagery","osm"] },
+    }, required: ["stack"] } } },
+  { type: "function", function: { name: "set_hud",
+    description: "Liga ou desliga elementos do HUD.",
+    parameters: { type: "object", properties: {
+      hud: { type: "string" },
+      enabled: { type: "boolean" },
+    }, required: ["hud","enabled"] } } },
+  { type: "function", function: { name: "set_panel_open",
+    description: "Abre ou fecha um painel lateral (dados, locais, recentes).",
+    parameters: { type: "object", properties: {
+      panel: { type: "string", enum: ["data","locations","recent","settings"] },
+      open: { type: "boolean" },
+    }, required: ["panel","open"] } } },
+  { type: "function", function: { name: "select_nearest_aircraft",
+    description: "Seleciona a aeronave mais proxima (precisa da camada Flights ligada).",
+    parameters: { type: "object", properties: { query: { type: "string" } } } } },
+  { type: "function", function: { name: "track_entity",
+    description: "Passa a seguir (trackear) uma entidade pelo nome/callsign.",
+    parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
+  { type: "function", function: { name: "stop_tracking",
+    description: "Para de seguir a entidade atual.",
+    parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "analyst_query",
+    description: "Conta/filtra/rankeia entidades de uma camada (ex: quantos avioes, barcos na area).",
+    parameters: { type: "object", properties: {
+      layerId: { type: "string", enum: LAYER_IDS },
+      query: { type: "string" },
+    }, required: ["layerId"] } } },
 ];
 
-const SYSTEM = `Voce controla um globo 3D (God's Eye View) por voz. Escolha a ferramenta certa
-para o comando do usuario. Se for um lugar especifico, use fly_to_location. Se for ligar/desligar
-algo, use set_layer_visibility. Responda SEMPRE chamando uma ferramenta quando fizer sentido.`;
+const SYSTEM = `Voce controla um globo 3D (God's Eye View) por voz. Escolha a ferramenta certa para o comando.
+Regras:
+- Lugar especifico/pais/cidade/regiao -> fly_to_location com query.
+- Ligar/desligar camadas de dados -> set_layer_visibility (ex: "mostra os barcos" -> ais-live-vessels; "liga as cameras" -> cctv; "aviões" -> flights; "satelites" -> satellites).
+- "afasta/zoom out/ver o globo" -> zoom_to_globe. "aproxima" -> adjust_camera_zoom.
+- Estilo de imagem (termico, noturno, retrô, etc) -> set_visual_style.
+- Mapa de base/ruas/rotulos -> set_map_stack.
+- Seguir um aviao/navio -> track_entity (ligue a camada antes se necessario).
+Se o pedido combinar (ex: "mostra os barcos e me leva pro litoral do Brasil"), chame TODAS as ferramentas necessarias.
+Responda SEMPRE chamando ferramentas quando fizer sentido; so responda em texto se nao houver acao.`;
 
 // ----------------------------- STT -----------------------------
 const STT_SCRIPT = path.join(__dirname, "_stt.py");
