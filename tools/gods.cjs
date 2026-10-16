@@ -118,11 +118,31 @@ function main() {
   console.log("  GOD'S EYE no ar");
   console.log("  ------------------------------------------------");
   console.log(`  PC       : http://localhost:${PORT}`);
-  console.log(`  CELULAR  : http://${ip}:${PORT}`);
+  console.log(`  CELULAR  : http://${ip}:${PORT}          (app completo)`);
+  console.log(`  CELULAR  : http://${ip}:${PORT}/?embed=1  (so o globo, = display)`);
   console.log(`  VOZ/mic  : http://localhost:${VOICE}/mic`);
   console.log("  ------------------------------------------------");
   console.log("  parar    : gods stop");
+
+  // aviso de firewall: o celular pede uma regra de entrada nas portas
+  if (!hasFirewallRule()) {
+    console.log("\n  [ATENCAO] Firewall sem regra para as portas " + PORT + "," + CAPTURE + "," + VOICE + ".");
+    console.log("  Se o celular der 'connection refused', rode UMA vez no");
+    console.log("  PowerShell COMO ADMINISTRADOR:");
+    console.log(`    New-NetFirewallRule -DisplayName "Gods Eye" -Direction Inbound \\`);
+    console.log(`      -LocalPort ${PORT},${CAPTURE},${VOICE} -Protocol TCP -Action Allow -Profile Private`);
+  }
   console.log("");
+}
+
+/** true se ja existe uma regra de entrada liberando a porta do Vite. */
+function hasFirewallRule() {
+  try {
+    const out = execSync(
+      `powershell -NoProfile -Command "(Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { $_.DisplayName -match 'Gods Eye|node' } | Measure-Object).Count"`,
+      { stdio: ["ignore", "pipe", "ignore"], timeout: 15000 }).toString().trim();
+    return parseInt(out, 10) > 0;
+  } catch { return false; }
 }
 
 main();
