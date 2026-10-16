@@ -139,10 +139,20 @@ Se o pedido combinar (ex: "mostra os barcos e me leva pro litoral do Brasil"), c
 Responda SEMPRE chamando ferramentas quando fizer sentido; so responda em texto se nao houver acao.`;
 
 // ----------------------------- STT -----------------------------
-const STT_SCRIPT = path.join(__dirname, "_stt.py");
+// Modelo PERSISTENTE: um processo Python fica com o modelo carregado,
+// eliminando a recarga (~1.5s) por gravacao.
+const { SttClient } = require("./stt-client.cjs");
+const STT_MODEL = arg("stt", process.env.STT_MODEL || "tiny");
+const stt = new SttClient({
+  python: PY,
+  script: path.join(__dirname, "_stt_server.py"),
+  model: STT_MODEL,
+});
+stt.start();
+process.on("exit", () => stt.stop());
+
 function transcribe(wavPath) {
-  const out = execFileSync(PY, [STT_SCRIPT, wavPath], { encoding: "utf-8", timeout: 120000 });
-  return out.trim();
+  return stt.transcribe(wavPath);
 }
 
 // ----------------------- OpenRouter -----------------------
@@ -454,7 +464,7 @@ wss.on("connection", (ws) => {
       console.log(`[voice] audio: ${audio.length} bytes -> ${file}`);
 
       try {
-        const text = transcribe(wavPath);
+        const text = await transcribe(wavPath);
         console.log(`[voice] STT: "${text}"`);
         entry.text = text || null;
         if (!text) { saveRecent(); ws.send(JSON.stringify({ ok: false, reason: "sem fala" })); return; }
