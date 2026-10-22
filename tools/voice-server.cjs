@@ -298,7 +298,10 @@ async function refineActions(text, calls, apiKey) {
       const v = await validateGeocode(text, a.args.query, cands, apiKey);
       if (v.ok) {
         console.log(`[voice] geocode "${a.args.query}" -> ${v.label} @ ${v.lat?.toFixed(2)},${v.lon?.toFixed(2)}`);
-        delete a.args.query;
+        // Tem que MANTER a query: o app usa locationId/query pra entrar no
+        // ramo certo do fly_to_location. Se sobrar apenas latitude/longitude
+        // ele ainda funciona, mas manter a query deixa o label legivel.
+        a.args.query = v.label || a.args.query;
         a.args.latitude = v.lat;
         a.args.longitude = v.lon;
         a.args.locationLabel = v.label;

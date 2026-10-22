@@ -100,10 +100,12 @@ TOOLS = [{
 }]
 
 SYSTEM = (
-    "Voce controla um globo 3D por voz. O usuario fala em portugues do Brasil. "
-    "Escute o audio, transcreva em portugues E chame a ferramenta certa.\n"
-    "IMPORTANTE: sempre escreva a transcricao do que ouviu (campo de texto) "
-    "E chame a ferramenta no mesmo turno.\n"
+    "Voce controla um globo 3D por voz. O usuario fala em portugues do Brasil.\n"
+    "SEMPRE faca DUAS coisas no mesmo turno, nesta ordem:\n"
+    "1) escreva um texto curto com a transcricao do que o usuario falou;\n"
+    "2) chame a ferramenta correspondente ao pedido.\n"
+    "Exemplo: texto \"Me leve para o Tóquio, Japão.\" e depois "
+    "fly_to_location(query=\"Tokyo\").\n"
     "Regras:\n"
     "- Lugar/pais/cidade -> fly_to_location com query (use o nome CORRETO do lugar).\n"
     "  'Tokio'/'Tóquio' -> Tokyo. 'Japao' -> Japan. 'Brasil' -> Brazil. "
