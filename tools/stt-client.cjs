@@ -79,6 +79,33 @@ class SttClient {
     });
   }
 
+  /** Resolve um nome de lugar em coordenadas (Gemini). */
+  geocode(query, timeoutMs = 45000) {
+    return new Promise((resolve, reject) => {
+      const g = spawn(this.python, [this.geminiScript], {
+        env: { ...process.env, GEMINI_MODEL: this.geminiModel },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = "", err = "";
+      const timer = setTimeout(() => { try { g.kill(); } catch {} reject(new Error("gemini geocode timeout")); }, timeoutMs);
+      g.stdout.on("data", (d) => (out += d.toString()));
+      g.stderr.on("data", (d) => (err += d.toString()));
+      g.on("close", () => {
+        clearTimeout(timer);
+        const lines = out.trim().split("\n").filter(Boolean);
+        const last = lines[lines.length - 1];
+        if (!last) return reject(new Error("geocode sem resposta: " + err.slice(0, 120)));
+        try {
+          const msg = JSON.parse(last);
+          if (!msg.ok) return reject(new Error(msg.reason || msg.error || "geocode falhou"));
+          resolve(msg);
+        } catch (e) { reject(new Error("geocode json: " + last.slice(0, 100))); }
+      });
+      g.stdin.write(JSON.stringify({ geocode: query }) + "\n");
+      g.stdin.end();
+    });
+  }
+
   /** Escolhe a acao a partir de um texto (Gemini, sem audio). */
   choose(text, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {

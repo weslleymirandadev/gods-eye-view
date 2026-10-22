@@ -214,15 +214,17 @@ async function photon(q, limit = 5) {
   } catch { return []; }
 }
 
-// Busca tolerante: "Tokyo, Japao" faz o Photon devolver uma praca em SP
-// (ele nao entende "cidade, pais"). Entao buscamos a query inteira E cada
-// parte separada, e juntamos os candidatos sem repetir.
+// Busca tolerante. A query COMPLETA vem primeiro e, se trouxer um resultado
+// que casa com ela, nem precisamos das partes: "Colombo, Parana, Brazil"
+// devolve o Colombo certo na posicao 0. As partes sao so um plano B.
 async function geocode(query) {
-  const parts = [query, ...query.split(/[,;\/]|\s+e\s+/).map((s) => s.trim())]
-    .filter((s, i, a) => s.length >= 2 && a.indexOf(s) === i);
+  const completo = await photon(query, 6);
+  if (completo.length) return completo.slice(0, 8);
 
-  const out = [];
-  const seen = new Set();
+  const parts = query.split(/[,;\/]|\s+e\s+/).map((s) => s.trim())
+    .filter((s, i, a) => s.length >= 3 && a.indexOf(s) === i);
+
+  const out = [], seen = new Set();
   for (const q of parts) {
     for (const c of await photon(q)) {
       const key = `${c.name}|${c.country}|${c.lat?.toFixed(2)}|${c.lon?.toFixed(2)}`;
@@ -230,92 +232,50 @@ async function geocode(query) {
       seen.add(key);
       out.push(c);
     }
-    if (out.length >= 8) break;   // ja tem candidatos suficientes
+    if (out.length >= 8) break;
   }
   return out.slice(0, 8);
 }
 
-// ---------------- validacao por IA ----------------
-// Dado o pedido e os candidatos do geocoder, a IA escolhe o correto
-// (ou diz que nenhum serve). Resolve o caso "Brasil" -> "Brazil, Indiana".
-const VALIDATE_SYSTEM = `Voce valida geocodificacao para um globo 3D. O usuario pediu um lugar por voz
-e um geocoder devolveu candidatos. Escolha o candidato que MELHOR corresponde ao pedido, considerando
-que nomes de PAISES, ESTADOS e REGIOES devem casar com o pais/estado/regiao -- NAO com cidades
-homonimas pequenas. Ex: "Brasil" = o pais Brazil, NAO a cidade "Brazil, Indiana, EUA".
-
-Responda SOMENTE com JSON, sem markdown:
-{"ok": true, "index": <indice do candidato escolhido>, "label": "<nome legivel>"}
-ou
-{"ok": false, "reason": "<motivo curto>"}`;
-
-async function validateGeocode(text, query, candidates, apiKey) {
-  if (!candidates.length) return { ok: false, reason: "sem candidatos" };
-  const headers = { "Content-Type": "application/json" };
-  headers["Author" + "ization"] = "Bea" + "rer " + apiKey;
-
-  const listing = candidates.map((c, i) =>
-    `${i}: "${c.name}" (${[c.state, c.country].filter(Boolean).join(", ")}) tipo=${c.type} @ ${c.lat?.toFixed(2)},${c.lon?.toFixed(2)}`
-  ).join("\n");
-
-  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST", headers,
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: "system", content: VALIDATE_SYSTEM },
-        ...history,
-        { role: "user", content: `Pedido: "${text}"\nBusca: "${query}"\nCandidatos:\n${listing}` },
-      ],
-      temperature: 0,
-    }),
-  });
-  const d = await r.json();
-  if (d.error) return { ok: false, reason: "openrouter: " + JSON.stringify(d.error).slice(0, 120) };
-  let raw = (d.choices?.[0]?.message?.content || "").trim();
-  raw = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed.ok && Number.isInteger(parsed.index) && candidates[parsed.index]) {
-      const c = candidates[parsed.index];
-      return { ok: true, lat: c.lat, lon: c.lon, label: parsed.label || c.name, chosen: c };
-    }
-    return { ok: false, reason: parsed.reason || "rejeitado" };
-  } catch {
-    return { ok: false, reason: "resposta invalida: " + raw.slice(0, 80) };
-  }
-}
-
-// refina as acoes fly_to_location com query:
-//   1. geocoda a query no servidor (Photon)
-//   2. a IA escolhe o candidato certo (resolve pais vs cidade homonima)
-//   3. troca {query} por {latitude, longitude} (pula a recuperacao do app)
-// Escolhe o candidato do geocoder sem outra chamada de IA.
-// Preferencia: pais > cidade > estado > resto; desempate pelo nome exato.
+// Escolhe o candidato. O Photon ja devolve ordenado por relevancia, entao
+// o 1o resultado costuma ser o certo. So trocamos quando um candidato cobre
+// MAIS partes da query (ex: "Colombo, Parana" -> prefere o do Parana).
 function pickCandidate(query, cands) {
+  if (!cands.length) return { ok: false, reason: "sem candidatos" };
+
   const q = String(query || "").toLowerCase();
-  const rank = (c) => {
-    const t = String(c.type || "").toLowerCase();
-    if (t === "country") return 5;
-    if (t === "city") return 4;
-    if (t === "state") return 3;
-    if (t === "district" || t === "county") return 2;
-    return 1;
-  };
+  const partes = q.split(/[,;/]|\s+e\s+/).map((t) => t.trim()).filter((t) => t.length >= 3);
+
+  // se a query e' simples (1 parte), confia no Photon
+  if (partes.length <= 1) {
+    const c = cands[0];
+    return {
+      ok: true, lat: c.lat, lon: c.lon,
+      label: [c.name, c.state, c.country].filter(Boolean).join(", "), score: 0,
+    };
+  }
+
+  // query composta: quantas partes cada candidato cobre
   const scored = cands.map((c, i) => {
-    const name = String(c.name || "").toLowerCase();
-    let s = rank(c) * 10;
-    if (name === q) s += 30;                  // nome bate exatamente
-    else if (q.includes(name) || name.includes(q)) s += 15;
-    return { c, i, s };
-  }).sort((a, b) => b.s - a.s || a.i - b.i);
+    const alvo = `${c.name || ""} ${c.state || ""} ${c.country || ""}`.toLowerCase();
+    let casa = 0;
+    for (const p of partes) if (alvo.includes(p)) casa++;
+    return { c, i, casa, s: casa * 100 - i };   // empate -> ordem do Photon
+  }).sort((a, b) => b.s - a.s);
 
   const best = scored[0];
-  if (!best) return { ok: false, reason: "sem candidatos" };
+  // se nenhum cobre mais que os outros, fica com o 1o do Photon
+  if (best.casa === 0) {
+    const c = cands[0];
+    return {
+      ok: true, lat: c.lat, lon: c.lon,
+      label: [c.name, c.state, c.country].filter(Boolean).join(", "), score: 0,
+    };
+  }
   return {
-    ok: true,
-    lat: best.c.lat,
-    lon: best.c.lon,
+    ok: true, lat: best.c.lat, lon: best.c.lon,
     label: [best.c.name, best.c.state, best.c.country].filter(Boolean).join(", "),
+    score: best.s,
   };
 }
 
@@ -324,25 +284,32 @@ async function refineActions(text, calls, apiKey) {
     const q = a.name === "fly_to_location" && String(a.args?.query || "").trim();
     if (!q || a.args.locationId) continue;
     try {
-      const cands = await geocode(a.args.query);
-      if (!cands.length) { console.log(`[voice] geocode "${q}" sem candidatos`); continue; }
+      // 1o: Gemini resolve o lugar com contexto (acerta homonimos:
+      // "Colombo, Parana" vs Colombo do Sri Lanka).
+      let v = null;
+      try {
+        const g = await stt.geocode(q);
+        v = { ok: true, lat: g.lat, lon: g.lon, label: g.label };
+        console.log(`[voice] gemini-geo "${q}" -> ${g.label} @ ${g.lat?.toFixed(2)},${g.lon?.toFixed(2)}`);
+      } catch (e) {
+        console.warn(`[voice] gemini-geo falhou (${e.message}); usando photon`);
+      }
 
-      // WAYPOINT a IA: o Gemini ja devolve o nome oficial ("Tokyo, Japan").
-      // Perguntar de novo pra outra IA (nemotron free) custava 1-2s e dava
-      // timeout. Escolhemos localmente: se houver UM candidato com o tipo
-      // esperado (pais/cidade), usa; caso ambiguo, cai no primeiro.
-      const v = pickCandidate(q, cands);
+      // 2o: fallback = Photon + escolha local
+      if (!v) {
+        const cands = await geocode(q);
+        if (!cands.length) { console.log(`[voice] geocode "${q}" sem candidatos`); continue; }
+        v = pickCandidate(q, cands);
+      }
+
       if (v.ok) {
-        console.log(`[voice] geocode "${a.args.query}" -> ${v.label} @ ${v.lat?.toFixed(2)},${v.lon?.toFixed(2)}`);
-        // Tem que MANTER a query: o app usa locationId/query pra entrar no
-        // ramo certo do fly_to_location. Se sobrar apenas latitude/longitude
-        // ele ainda funciona, mas manter a query deixa o label legivel.
         a.args.query = v.label || a.args.query;
         a.args.latitude = v.lat;
         a.args.longitude = v.lon;
         a.args.locationLabel = v.label;
+        if (!v.label) console.log(`[voice] geocode "${q}" @ ${v.lat?.toFixed(2)},${v.lon?.toFixed(2)}`);
       } else {
-        console.log(`[voice] geocode "${a.args.query}" rejeitado: ${v.reason}`);
+        console.log(`[voice] geocode "${q}" rejeitado: ${v.reason}`);
       }
     } catch (e) {
       console.log("[voice] refine erro:", e.message);

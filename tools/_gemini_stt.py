@@ -161,6 +161,38 @@ def call_gemini(key, wav_path):
     return text.strip(), actions
 
 
+GEO_SYS = (
+    "Voce e um geocoder. Dado um nome de lugar, devolva as coordenadas do "
+    "lugar EXATO que o usuario quer, usando TODO o contexto (cidade, estado, pais, bairro). "
+    "Se houver lugares homonimos, escolha o que casa com o contexto dado. "
+    'Responda SOMENTE JSON: {"lat": <numero>, "lon": <numero>, '
+    '"label": "<nome>, <estado>, <pais>", "confianca": "alta|media|baixa"}'
+)
+
+
+def geocode_text(key, query):
+    """Resolve um nome de lugar em coordenadas usando o Gemini."""
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{MODEL}:generateContent?key={key}")
+    body = {
+        "system_instruction": {"parts": [{"text": GEO_SYS}]},
+        "contents": [{"parts": [{"text": query}]}],
+        "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"})
+    d = json.load(urllib.request.urlopen(req, timeout=40))
+    txt = d["candidates"][0]["content"]["parts"][0]["text"].strip()
+    r = json.loads(txt)
+    lat, lon = float(r["lat"]), float(r["lon"])
+    conf = str(r.get("confianca", "")).lower()
+    if conf == "baixa":
+        return {"ok": False, "reason": "confianca baixa"}
+    return {"ok": True, "lat": lat, "lon": lon,
+            "label": r.get("label") or query, "confianca": conf}
+
+
 def choose_action_from_text(key, text):
     """Escolhe a ferramenta a partir de um texto ja transcrito (sem audio)."""
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -199,6 +231,15 @@ def main():
             continue
         if cmd.get("quit"):
             break
+        # modo geocode: resolve um nome de lugar em coordenadas
+        if cmd.get("geocode"):
+            try:
+                g = geocode_text(key, cmd["geocode"])
+                print(json.dumps(g, ensure_ascii=False), flush=True)
+            except Exception as e:
+                print(json.dumps({"ok": False, "error": str(e)}), flush=True)
+            continue
+
         # modo texto: usado quando o STT ja transcreveu (fallback)
         if cmd.get("text"):
             try:
