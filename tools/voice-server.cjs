@@ -142,11 +142,13 @@ Responda SEMPRE chamando ferramentas quando fizer sentido; so responda em texto 
 // Modelo PERSISTENTE: um processo Python fica com o modelo carregado,
 // eliminando a recarga (~1.5s) por gravacao.
 const { SttClient } = require("./stt-client.cjs");
-const STT_MODEL = arg("stt", process.env.STT_MODEL || "tiny");
+const STT_MODEL = arg("stt", process.env.STT_MODEL || "base");
+const STT_LANGUAGE = arg("lang", process.env.STT_LANGUAGE || "pt");
 const stt = new SttClient({
   python: PY,
   script: path.join(__dirname, "_stt_server.py"),
   model: STT_MODEL,
+  language: STT_LANGUAGE,
 });
 stt.start();
 process.on("exit", () => stt.stop());

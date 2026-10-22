@@ -7,10 +7,11 @@ const { spawn } = require("child_process");
 const path = require("path");
 
 class SttClient {
-  constructor({ python, script, model = "tiny" } = {}) {
+  constructor({ python, script, model = "base", language = "pt" } = {}) {
     this.python = python;
     this.script = script;
     this.model = model;
+    this.language = language;
     this.proc = null;
     this.queue = [];      // promessas aguardando resposta
     this.buf = "";
@@ -20,7 +21,7 @@ class SttClient {
   start() {
     if (this.proc) return;
     this.proc = spawn(this.python, [this.script], {
-      env: { ...process.env, STT_MODEL: this.model },
+      env: { ...process.env, STT_MODEL: this.model, STT_LANGUAGE: this.language },
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.proc.stdout.on("data", (d) => {

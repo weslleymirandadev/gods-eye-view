@@ -5,12 +5,18 @@ Protocolo (stdin/stdout, uma linha JSON por comando):
   <- {"ok": true, "text": "..."}  ou  {"ok": false, "error": "..."}
   -> {"quit": true}   encerra
 
-Modelo via env STT_MODEL (default "tiny").
+Variaveis de ambiente:
+  STT_MODEL     modelo do whisper (default "small")
+  STT_LANGUAGE  idioma forcado (default "pt"; "auto" = detectar)
 """
 import sys, json, os
 from faster_whisper import WhisperModel
 
-MODEL = os.environ.get("STT_MODEL", "tiny")
+MODEL = os.environ.get("STT_MODEL", "small")
+LANGUAGE = os.environ.get("STT_LANGUAGE", "pt")
+if LANGUAGE.strip().lower() in ("", "auto", "none"):
+    LANGUAGE = None
+
 _model = None
 
 
@@ -22,14 +28,28 @@ def get_model():
 
 
 def transcribe(path):
-    segs, _ = get_model().transcribe(path, language=None, beam_size=1, vad_filter=True)
+    segs, info = get_model().transcribe(
+        path,
+        language=LANGUAGE,        # fixo em pt: nao deixa detectar errado
+        beam_size=1,              # mais rapido (1 = greedy)
+        vad_filter=True,          # corta silencio, acelera
+        vad_parameters=dict(min_silence_duration_ms=300),
+        condition_on_previous_text=False,   # evita "loop" de contexto
+        temperature=0.0,          # deterministico
+        # initial_prompt ajuda o modelo a ficar no idioma e no dominio
+        initial_prompt=(
+            "Comandos em portugues do Brasil sobre um globo 3D: "
+            "me leva para o Brasil, mostra os barcos, liga as cameras, "
+            "mostra os avioes, satelites, terremotos, aproxima, afasta."
+        ),
+    )
     return " ".join(s.text.strip() for s in segs).strip()
 
 
 def main():
-    # carrega o modelo agora (o primeiro comando nao paga a carga)
-    get_model()
-    print(json.dumps({"ready": True, "model": MODEL}), flush=True)
+    get_model()   # carrega agora: o primeiro comando nao paga a carga
+    print(json.dumps({"ready": True, "model": MODEL, "language": LANGUAGE or "auto"}),
+          flush=True)
 
     for line in sys.stdin:
         line = line.strip()
