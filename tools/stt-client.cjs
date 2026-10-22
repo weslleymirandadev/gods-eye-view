@@ -79,6 +79,33 @@ class SttClient {
     });
   }
 
+  /** Escolhe a acao a partir de um texto (Gemini, sem audio). */
+  choose(text, timeoutMs = 60000) {
+    return new Promise((resolve, reject) => {
+      const g = spawn(this.python, [this.geminiScript], {
+        env: { ...process.env, GEMINI_MODEL: this.geminiModel },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = "", err = "";
+      const timer = setTimeout(() => { try { g.kill(); } catch {} reject(new Error("gemini timeout")); }, timeoutMs);
+      g.stdout.on("data", (d) => (out += d.toString()));
+      g.stderr.on("data", (d) => (err += d.toString()));
+      g.on("close", () => {
+        clearTimeout(timer);
+        const lines = out.trim().split("\n").filter(Boolean);
+        const last = lines[lines.length - 1];
+        if (!last) return reject(new Error("gemini sem resposta: " + err.slice(0, 150)));
+        try {
+          const msg = JSON.parse(last);
+          if (!msg.ok) return reject(new Error(msg.error || "gemini falhou"));
+          resolve(msg.actions || []);
+        } catch (e) { reject(new Error("gemini json: " + last.slice(0, 120))); }
+      });
+      g.stdin.write(JSON.stringify({ text }) + "\n");
+      g.stdin.end();
+    });
+  }
+
   /** Transcreve um WAV. Retorna o texto. */
   transcribe(wavPath, timeoutMs = 60000) {
     this.start();

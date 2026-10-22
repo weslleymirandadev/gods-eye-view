@@ -547,7 +547,7 @@ wss.on("connection", (ws) => {
             console.warn("[voice] gemini falhou, caindo pro whisper:", e.message);
           }
         }
-        // fallback: whisper + openrouter
+        // fallback: Whisper transcreve, Gemini escolhe (sem OpenRouter)
         if (!calls || !calls.length) {
           if (!text) {
             text = await transcribe(wavPath);
@@ -555,9 +555,14 @@ wss.on("connection", (ws) => {
           }
           entry.text = text || null;
           if (!text) { saveRecent(); ws.send(JSON.stringify({ ok: false, reason: "sem fala" })); return; }
-          const r = await pickAction(text, apiKey);
-          calls = r.calls;
-          console.log("[voice] acoes:", JSON.stringify(calls));
+          try {
+            calls = await stt.choose(text);
+            console.log("[voice] gemini(texto) acoes:", JSON.stringify(calls));
+          } catch (e) {
+            console.warn("[voice] gemini(texto) falhou:", e.message);
+            const r = await pickAction(text, apiKey);   // ultimo recurso
+            calls = r.calls;
+          }
         }
         entry.text = text || null;
         if (!calls || !calls.length) {

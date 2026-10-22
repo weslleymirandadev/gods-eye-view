@@ -161,6 +161,26 @@ def call_gemini(key, wav_path):
     return text.strip(), actions
 
 
+def choose_action_from_text(key, text):
+    """Escolhe a ferramenta a partir de um texto ja transcrito (sem audio)."""
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{MODEL}:generateContent?key={key}")
+    body = {
+        "system_instruction": {"parts": [{"text": SYSTEM}]},
+        "contents": [{"parts": [{"text": text}]}],
+        "tools": TOOLS,
+        "generationConfig": {"temperature": 0},
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"})
+    d = json.load(urllib.request.urlopen(req, timeout=60))
+    parts = ((d.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+    return [{"name": p["functionCall"]["name"],
+             "args": p["functionCall"].get("args") or {}}
+            for p in parts if "functionCall" in p]
+
+
 def main():
     key = load_key()
     if not key:
@@ -179,6 +199,16 @@ def main():
             continue
         if cmd.get("quit"):
             break
+        # modo texto: usado quando o STT ja transcreveu (fallback)
+        if cmd.get("text"):
+            try:
+                acts = choose_action_from_text(key, cmd["text"])
+                print(json.dumps({"ok": True, "text": cmd["text"], "actions": acts},
+                                 ensure_ascii=False), flush=True)
+            except Exception as e:
+                print(json.dumps({"ok": False, "error": str(e)}), flush=True)
+            continue
+
         wav = cmd.get("wav")
         if not wav or not os.path.exists(wav):
             print(json.dumps({"ok": False, "error": "wav nao encontrado"}), flush=True)
