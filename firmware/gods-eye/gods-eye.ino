@@ -26,6 +26,7 @@
 #include "audio_processor.h"
 #include "voice_client.h"
 #include "recorder.h"
+#include "touch_button.h"
 
 // chamada no .ino principal (declarada em video_stream.ino)
 void initDisplay();
@@ -54,19 +55,20 @@ void setup() {
   delay(800);
   Serial.println("\n=== GOD'S EYE (video + voz) ===");
   Serial.printf("PSRAM: %s\n", psramFound() ? "SIM" : "NAO");
+  Serial.printf("heap livre: %u\n", (unsigned)ESP.getFreeHeap());
   Serial.flush();
 
   initDisplay();
   initVideoStream();
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
   initAudioProcessor();
   initI2S();
   delay(100);
   calibrateDCOffset();
 
-  connectWiFi();
+  initTouchButton();
 
+  connectWiFi();
   initVoiceClient();
 
   Serial.println("Sistema pronto (video + voz)");
@@ -85,7 +87,7 @@ void loop() {
   convert32to16(rawI2sBuffer, processedBuffer, samplesRead);
   uint32_t rms = computeSmoothedRMS(computeRMS(processedBuffer, samplesRead));
 
-  bool buttonPressed = !digitalRead(BUTTON_PIN);
+  bool buttonPressed = touchPressed();   // botao capacitivo
 
   if (isVADMode()) {
     // modo VAD (deteccao de voz) — do INMP441-base
@@ -111,8 +113,9 @@ void loop() {
   static uint32_t lastFps = millis(), lastCount = 0;
   if (millis() - lastFps >= 2000) {
     uint32_t fps = (videoFrames() - lastCount) * 1000 / (millis() - lastFps);
-    Serial.printf("[fps] %lu total=%lu rms=%lu%s\n",
+    Serial.printf("[fps] %lu total=%lu rms=%lu touch=%lu(base=%ld)%s\n",
                   (unsigned long)fps, (unsigned long)videoFrames(), (unsigned long)rms,
+                  (unsigned long)touchRaw(), (long)touchBaseline(),
                   isRecording() ? " GRAVANDO" : "");
     lastCount = videoFrames();
     lastFps = millis();

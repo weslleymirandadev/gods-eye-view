@@ -39,3 +39,4 @@ captures/
 tools/_fake-mic.cjs
 
 .gods.pids
+.vscode/

@@ -1,6 +1,9 @@
 #include "i2s_handler.h"
 #include "driver/i2s.h"
 
+// IDENTICO ao INMP441-base (que funciona). Nao mexer:
+//   ONLY_LEFT + dma 4x1024 + 32 bits.
+// Se o mic nao responde, o problema e' fiacao (L/R no GND), nao config.
 void initI2S() {
   i2s_config_t config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),

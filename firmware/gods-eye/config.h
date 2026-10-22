@@ -1,3 +1,4 @@
+
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -28,7 +29,9 @@ static const int   WS_VOICE_PORT = 8083;
 #define I2S_WS   15
 #define I2S_SD   16
 
-#define BUTTON_PIN 36
+// Botao TTP223 (Catalex) no GPIO 21.
+// NAO usar 36/37: vizinhos do TFT_RST (37) -> derruba o display.
+#define TOUCH_PIN 21
 
 // ================== Audio (do INMP441-base) ==================
 #define SAMPLE_RATE 16000
