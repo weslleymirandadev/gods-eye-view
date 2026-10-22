@@ -144,12 +144,28 @@ async function captureLoop() {
 // Protocolo: [0x03][total0..3][off0..3][dados...]  (total e off 32-bit LE)
 const CHUNK = 8 * 1024;   // 8KB por mensagem
 
-// fila simples: manda pra todos os clientes ativos (sem handshake)
+// Envia SEM empilhar: se o cliente esta atrasado (buffer do socket cheio),
+// pula o frame inteiro. Sem isso a fila do TCP cresce sem parar e o video
+// vai ficando cada vez mais atrasado conforme o tempo passa.
+//
+// BACKLOG_MAX: quanto o socket pode ter pendente antes de pularmos o frame.
+// ~1 frame (12KB) = ainda ok. Acima disso o ESP nao acompanha.
+const BACKLOG_MAX = 24 * 1024;
+let framesSkipped = 0;
+
 function broadcast() {
   if (!frameBuf || !frameBuf.length) return;
   const total = frameBuf.length;
+
   for (const ws of clients) {
     if (ws.readyState !== 1) continue;
+
+    // se ja tem 1+ frame nao enviado, este frame esta velho: descarta
+    if (ws.bufferedAmount > BACKLOG_MAX) {
+      framesSkipped++;
+      continue;
+    }
+
     for (let off = 0; off < total; off += CHUNK) {
       const end = Math.min(off + CHUNK, total);
       const msg = Buffer.concat([
@@ -218,7 +234,7 @@ server.listen(WS_PORT, "0.0.0.0", async () => {
 });
 
 setInterval(() => {
-  if (running) console.log(`[stats] frames=${frameCount} clients=${clients.size} cap=${captureMs}ms`);
+  if (running) console.log(`[stats] frames=${frameCount} clients=${clients.size} cap=${captureMs}ms pulados=${framesSkipped}`);
 }, 5000);
 
 process.on("SIGINT", async () => { running = false; if (browser) await browser.close(); process.exit(0); });
