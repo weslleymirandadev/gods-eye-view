@@ -149,6 +149,8 @@ const stt = new SttClient({
   script: path.join(__dirname, "_stt_server.py"),
   model: STT_MODEL,
   language: STT_LANGUAGE,
+  geminiScript: path.join(__dirname, "_gemini_stt.py"),
+  geminiModel: arg("gmodel", process.env.GEMINI_MODEL || "gemini-3.5-flash-lite"),
 });
 stt.start();
 process.on("exit", () => stt.stop());
@@ -191,19 +193,46 @@ function pushHistory(role, content) {
 
 // ---------------- geocoder (Photon, keyless) ----------------
 // Resolve um nome em coordenadas antes de mandar pra IA validar.
-async function geocode(query) {
-  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5`;
-  const r = await fetch(url);
-  if (!r.ok) return [];
-  const d = await r.json();
-  return (d.features || []).map((f) => ({
+function mapFeature(f) {
+  return {
     name: f.properties?.name || "",
     country: f.properties?.country || "",
     state: f.properties?.state || "",
     type: f.properties?.type || f.properties?.osm_value || "",
     lat: f.geometry?.coordinates?.[1],
     lon: f.geometry?.coordinates?.[0],
-  }));
+  };
+}
+
+async function photon(q, limit = 5) {
+  try {
+    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=${limit}`;
+    const r = await fetch(url);
+    if (!r.ok) return [];
+    const d = await r.json();
+    return (d.features || []).map(mapFeature);
+  } catch { return []; }
+}
+
+// Busca tolerante: "Tokyo, Japao" faz o Photon devolver uma praca em SP
+// (ele nao entende "cidade, pais"). Entao buscamos a query inteira E cada
+// parte separada, e juntamos os candidatos sem repetir.
+async function geocode(query) {
+  const parts = [query, ...query.split(/[,;\/]|\s+e\s+/).map((s) => s.trim())]
+    .filter((s, i, a) => s.length >= 2 && a.indexOf(s) === i);
+
+  const out = [];
+  const seen = new Set();
+  for (const q of parts) {
+    for (const c of await photon(q)) {
+      const key = `${c.name}|${c.country}|${c.lat?.toFixed(2)}|${c.lon?.toFixed(2)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(c);
+    }
+    if (out.length >= 8) break;   // ja tem candidatos suficientes
+  }
+  return out.slice(0, 8);
 }
 
 // ---------------- validacao por IA ----------------
@@ -466,12 +495,37 @@ wss.on("connection", (ws) => {
       console.log(`[voice] audio: ${audio.length} bytes -> ${file}`);
 
       try {
-        const text = await transcribe(wavPath);
-        console.log(`[voice] STT: "${text}"`);
+        // 1o: Gemini escuta o audio e ja escolhe a acao (1 chamada so).
+        let text = "", calls = null;
+        const useGemini = arg("engine", process.env.VOICE_ENGINE || "gemini") === "gemini";
+        if (useGemini) {
+          try {
+            const g = await stt.analyze(wavPath);
+            text = g.text;
+            calls = g.actions;
+            console.log(`[voice] gemini ${g.ms}ms -> text="${text}" acoes=${JSON.stringify(calls)}`);
+          } catch (e) {
+            console.warn("[voice] gemini falhou, caindo pro whisper:", e.message);
+          }
+        }
+        // fallback: whisper + openrouter
+        if (!calls || !calls.length) {
+          if (!text) {
+            text = await transcribe(wavPath);
+            console.log(`[voice] STT: "${text}"`);
+          }
+          entry.text = text || null;
+          if (!text) { saveRecent(); ws.send(JSON.stringify({ ok: false, reason: "sem fala" })); return; }
+          const r = await pickAction(text, apiKey);
+          calls = r.calls;
+          console.log("[voice] acoes:", JSON.stringify(calls));
+        }
         entry.text = text || null;
-        if (!text) { saveRecent(); ws.send(JSON.stringify({ ok: false, reason: "sem fala" })); return; }
-        const { calls } = await pickAction(text, apiKey);
-        console.log("[voice] acoes:", JSON.stringify(calls));
+        if (!calls || !calls.length) {
+          saveRecent();
+          ws.send(JSON.stringify({ ok: false, reason: "nenhuma acao", text }));
+          return;
+        }
         await refineActions(text, calls, apiKey);
         entry.actions = calls;
         const res = await runActions(calls);

@@ -7,11 +7,13 @@ const { spawn } = require("child_process");
 const path = require("path");
 
 class SttClient {
-  constructor({ python, script, model = "base", language = "pt" } = {}) {
+  constructor({ python, script, model = "base", language = "pt", geminiScript = null, geminiModel = "gemini-3.5-flash-lite" } = {}) {
     this.python = python;
     this.script = script;
     this.model = model;
     this.language = language;
+    this.geminiScript = geminiScript;
+    this.geminiModel = geminiModel;
     this.proc = null;
     this.queue = [];      // promessas aguardando resposta
     this.buf = "";
@@ -47,6 +49,33 @@ class SttClient {
       this.proc = null; this.ready = false;
       // rejeita quem estava esperando
       while (this.queue.length) this.queue.shift()({ ok: false, error: "stt caiu" });
+    });
+  }
+
+  /** Manda o WAV pro Gemini: devolve { text, actions } numa chamada so. */
+  analyze(wavPath, timeoutMs = 90000) {
+    return new Promise((resolve, reject) => {
+      const g = spawn(this.python, [this.geminiScript], {
+        env: { ...process.env, GEMINI_MODEL: this.geminiModel },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = "", err = "";
+      const timer = setTimeout(() => { try { g.kill(); } catch {} reject(new Error("gemini timeout")); }, timeoutMs);
+      g.stdout.on("data", (d) => (out += d.toString()));
+      g.stderr.on("data", (d) => (err += d.toString()));
+      g.on("close", () => {
+        clearTimeout(timer);
+        const lines = out.trim().split("\n").filter(Boolean);
+        const last = lines[lines.length - 1];
+        if (!last) return reject(new Error("gemini sem resposta: " + err.slice(0, 200)));
+        try {
+          const msg = JSON.parse(last);
+          if (!msg.ok) return reject(new Error(msg.error || "gemini falhou"));
+          resolve({ text: msg.text || "", actions: msg.actions || [], ms: msg.ms });
+        } catch (e) { reject(new Error("gemini json: " + last.slice(0, 150))); }
+      });
+      g.stdin.write(JSON.stringify({ wav: wavPath }) + "\n");
+      g.stdin.end();
     });
   }
 
