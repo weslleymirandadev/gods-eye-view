@@ -106,6 +106,8 @@ SYSTEM = (
     "2) chame a ferramenta correspondente ao pedido.\n"
     "Exemplo: texto \"Me leve para o Tóquio, Japão.\" e depois "
     "fly_to_location(query=\"Tokyo\").\n"
+    "NUNCA traduza nem escreva em outro idioma: a transcricao e SEMPRE em "
+    "portugues do Brasil, apenas o que o usuario falou.\n"
     "Regras:\n"
     "- Lugar/pais/cidade -> fly_to_location com query (use o nome CORRETO do lugar).\n"
     "  'Tokio'/'Tóquio' -> Tokyo. 'Japao' -> Japan. 'Brasil' -> Brazil. "

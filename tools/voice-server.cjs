@@ -289,13 +289,49 @@ async function validateGeocode(text, query, candidates, apiKey) {
 //   1. geocoda a query no servidor (Photon)
 //   2. a IA escolhe o candidato certo (resolve pais vs cidade homonima)
 //   3. troca {query} por {latitude, longitude} (pula a recuperacao do app)
+// Escolhe o candidato do geocoder sem outra chamada de IA.
+// Preferencia: pais > cidade > estado > resto; desempate pelo nome exato.
+function pickCandidate(query, cands) {
+  const q = String(query || "").toLowerCase();
+  const rank = (c) => {
+    const t = String(c.type || "").toLowerCase();
+    if (t === "country") return 5;
+    if (t === "city") return 4;
+    if (t === "state") return 3;
+    if (t === "district" || t === "county") return 2;
+    return 1;
+  };
+  const scored = cands.map((c, i) => {
+    const name = String(c.name || "").toLowerCase();
+    let s = rank(c) * 10;
+    if (name === q) s += 30;                  // nome bate exatamente
+    else if (q.includes(name) || name.includes(q)) s += 15;
+    return { c, i, s };
+  }).sort((a, b) => b.s - a.s || a.i - b.i);
+
+  const best = scored[0];
+  if (!best) return { ok: false, reason: "sem candidatos" };
+  return {
+    ok: true,
+    lat: best.c.lat,
+    lon: best.c.lon,
+    label: [best.c.name, best.c.state, best.c.country].filter(Boolean).join(", "),
+  };
+}
+
 async function refineActions(text, calls, apiKey) {
   for (const a of calls) {
     const q = a.name === "fly_to_location" && String(a.args?.query || "").trim();
     if (!q || a.args.locationId) continue;
     try {
       const cands = await geocode(a.args.query);
-      const v = await validateGeocode(text, a.args.query, cands, apiKey);
+      if (!cands.length) { console.log(`[voice] geocode "${q}" sem candidatos`); continue; }
+
+      // WAYPOINT a IA: o Gemini ja devolve o nome oficial ("Tokyo, Japan").
+      // Perguntar de novo pra outra IA (nemotron free) custava 1-2s e dava
+      // timeout. Escolhemos localmente: se houver UM candidato com o tipo
+      // esperado (pais/cidade), usa; caso ambiguo, cai no primeiro.
+      const v = pickCandidate(q, cands);
       if (v.ok) {
         console.log(`[voice] geocode "${a.args.query}" -> ${v.label} @ ${v.lat?.toFixed(2)},${v.lon?.toFixed(2)}`);
         // Tem que MANTER a query: o app usa locationId/query pra entrar no
