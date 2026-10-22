@@ -78,17 +78,45 @@ async function startBrowser() {
   console.log(`[cap] carregando ${url} (${VIEW_SIZE}x${VIEW_SIZE})`);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-  // esconde creditos/marca d'agua do Cesium (nao poluem o display do ESP)
+  // esconde creditos/marca d'agua do Cesium (nao poluem o display do ESP).
+  // O container real e' .cesium-widget-credits (creditDisplay.container);
+  // os wrappers internos sao .cesium-credit-wrapper.
   await page.addStyleTag({ content: `
-    #cesium-credits, .cesium-credit-container, .cesium-widget-credits,
-    .cesium-credit-logoContainer, .cesium-credit-expand-link,
-    .cesium-widget-credits, [class*="cesium-credit"],
-    [class*="cesium-widget-credit"] { display: none !important; visibility: hidden !important; }
+    .cesium-widget-credits,
+    .cesium-credit-wrapper,
+    .cesium-credit-container,
+    .cesium-credit-logoContainer,
+    .cesium-credit-expand-link,
+    .cesium-credit-textContainer,
+    .cesium-credit-imageContainer,
+    #cesium-credits,
+    #credit-container,
+    [class*="cesium-credit"],
+    [class*="cesium-widget-credit"] {
+      display: none !important;
+      visibility: hidden !important;
+      opacity: 0 !important;
+      height: 0 !important;
+      width: 0 !important;
+      overflow: hidden !important;
+    }
   `});
 
   await page.waitForSelector("canvas", { timeout: 60000 });
   console.log("[cap] canvas pronto. aguardando init...");
   await new Promise((r) => setTimeout(r, 8000));
+
+  // segunda passada: o Cesium recria o container de creditos ao inicializar,
+  // entao removemos de novo depois que o viewer existir.
+  await page.evaluate(() => {
+    const kill = () => {
+      document.querySelectorAll('.cesium-widget-credits, .cesium-credit-wrapper, [class*="cesium-credit"]')
+        .forEach((el) => { el.style.display = "none"; el.remove(); });
+    };
+    kill();
+    setInterval(kill, 1000);   // vigia: se recriar, some de novo
+  });
+  console.log("[cap] creditos do Cesium removidos");
 
   await applyView();
   console.log("[cap] view aplicada. aguardando feeds (8s)...");
