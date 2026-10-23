@@ -336,13 +336,10 @@ export class StreetLevelControls {
       wrap.setAttribute('aria-label', 'Street-level image');
       wrap.tabIndex = -1;
       wrap.focus({ preventScroll: true });
-      // Esconde dock/HUD/modais: em tela cheia so o panorama aparece.
-      document.body.classList.add('gev-panorama-mode');
       this._watchModal(true);
     } else {
       // Release the application first: the focus returned below may be in it.
       this._watchModal(false);
-      document.body.classList.remove('gev-panorama-mode');
       wrap.classList.remove('sl-viewer-wrap-expanded');
       wrap.removeAttribute('role');
       wrap.removeAttribute('aria-modal');
@@ -674,7 +671,6 @@ export class StreetLevelControls {
     if (this.destroyed) return;
     this.destroyed = true;
     this.setViewerExpanded(false);
-    document.body.classList.remove('gev-panorama-mode');
     this._watchModal(false);
     this.listeners.abort();
     this._resizeObserver?.disconnect();

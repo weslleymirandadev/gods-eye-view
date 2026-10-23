@@ -558,16 +558,11 @@ button.sl-status:focus-visible {
 /* Re-parented to <body>: the panel's backdrop-filter would contain a fixed
    child. z-index sits above panels (≤139), below the voice pill (150). */
 .sl-viewer-wrap-expanded {
-  /* Tela cheia de verdade: o painel cobre a viewport inteira (inclusive o
-     backdrop que esconde o Cesium, z-index 140). */
   position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
-  margin: 0;
-  border-radius: 0;
-  border: 0;
+  left: 4vw;
+  right: 4vw;
+  top: 5vh;
+  bottom: 9vh;
   z-index: 141;
   display: flex;
   flex-direction: column;
@@ -580,26 +575,6 @@ button.sl-status:focus-visible {
 .sl-viewer-wrap-expanded .sl-viewer-stage {
   flex: 1 1 auto;
   min-height: 0;
-  width: 100%;
-  height: 100%;
-}
-
-/* O viewer e todos os containers do Google preenchem a tela toda. */
-.sl-viewer-wrap-expanded .sl-viewer,
-.sl-viewer-wrap-expanded .sl-viewer > div,
-.sl-viewer-wrap-expanded .sl-google-panorama,
-.sl-viewer-wrap-expanded .gm-style,
-.sl-viewer-wrap-expanded .gm-style > div {
-  width: 100% !important;
-  height: 100% !important;
-  min-height: 0 !important;
-  max-height: none !important;
-  aspect-ratio: auto !important;
-}
-
-.sl-viewer-wrap-expanded .widget-scene-canvas {
-  width: 100% !important;
-  height: 100% !important;
 }
 
 .sl-viewer-wrap-expanded .sl-viewer {
@@ -660,92 +635,4 @@ button.sl-status:focus-visible {
     height: clamp(110px, calc(48vh - 8px - 7.5rem - 150px), 320px);
     min-height: 0;
   }
-}
-
-/* ── Tela cheia com SÓ o panorama ───────────────────────────────────────
-   Sem barra, sem X, sem borda: o canvas cobre a viewport inteira.
-   As ferramentas sao alcancadas pelo painel normal; em fullscreen o unico
-   caminho de saida e o toque duplo (ou Esc). */
-.sl-viewer-wrap-expanded {
-  background: #000;
-  border: 0 !important;
-  border-radius: 0 !important;
-  box-shadow: none !important;
-  outline: none !important;
-}
-
-.sl-viewer-wrap-expanded .sl-viewer-bar,
-.sl-viewer-wrap-expanded .sl-viewer-tools,
-.sl-viewer-wrap-expanded .sl-viewer-tools-right,
-.sl-viewer-wrap-expanded .sl-viewer-x,
-.sl-viewer-wrap-expanded #sl-viewer-close,
-.sl-viewer-wrap-expanded #sl-viewer-expand,
-.sl-viewer-wrap-expanded .sl-viewer-placeholder,
-.sl-viewer-wrap-expanded button {
-  display: none !important;
-}
-
-.sl-viewer-wrap-expanded .sl-viewer-stage {
-  position: absolute !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  height: 100dvh !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  flex: none !important;
-}
-
-.sl-viewer-wrap-expanded .sl-viewer,
-.sl-viewer-wrap-expanded .sl-viewer > div,
-.sl-viewer-wrap-expanded .sl-google-panorama,
-.sl-viewer-wrap-expanded .gm-style,
-.sl-viewer-wrap-expanded .gm-style > div {
-  position: absolute !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  height: 100dvh !important;
-  min-height: 0 !important;
-  max-height: none !important;
-  aspect-ratio: auto !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-}
-
-.sl-viewer-wrap-expanded canvas.widget-scene-canvas,
-.sl-viewer-wrap-expanded .widget-scene-canvas {
-  width: 100vw !important;
-  height: 100vh !important;
-  height: 100dvh !important;
-  border-radius: 0 !important;
-}
-
-/* ── Modo panorama: SO o canvas na tela ─────────────────────────────────
-   Com o panorama aberto, tudo que e' do app (dock, HUD, modais, creditos,
-   chips) sai de cena. O unico caminho de saida e' o toque duplo no ESP ou
-   Esc. O painel expandido fica em z-index 141; aqui subimos para 10000. */
-body.gev-panorama-mode .command-dock,
-body.gev-panorama-mode #command-dock,
-body.gev-panorama-mode #intel-hud,
-body.gev-panorama-mode #orbit-indicator,
-body.gev-panorama-mode #key-setup-chip,
-body.gev-panorama-mode #cesium-credits,
-body.gev-panorama-mode #loading-screen,
-body.gev-panorama-mode .gev-screen-whiteboard,
-body.gev-panorama-mode .mission-control,
-body.gev-panorama-mode [class*="mission-control"],
-body.gev-panorama-mode [class*="first-launch"],
-body.gev-panorama-mode [class*="panel-rail"],
-body.gev-panorama-mode [class*="data-panel"],
-body.gev-panorama-mode [class*="toast"],
-body.gev-panorama-mode [class*="hev-"] {
-  display: none !important;
-}
-
-body.gev-panorama-mode .sl-viewer-wrap-expanded {
-  z-index: 10000 !important;
 }
