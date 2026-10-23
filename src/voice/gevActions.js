@@ -932,6 +932,70 @@ export function createGevActionRunner({
       };
     }
 
+    // ── Clique no centro da tela (toque simples no ESP) ─────────────────
+    // Agnostico: nao importa se e' Cesium, Street View ou qualquer overlay.
+    // Pegamos o elemento que esta SOB o centro da viewport e disparamos a
+    // sequencia completa de eventos nele (e no document, pra handlers
+    // globais como o pick do Cesium).
+    if (name === 'click_at_crosshair') {
+      const doc = viewer?.scene?.canvas?.ownerDocument || globalThis.document;
+      if (!doc) return { ok: false, action: name, error: 'no document' };
+
+      const x = Math.round(globalThis.innerWidth / 2);
+      const y = Math.round(globalThis.innerHeight / 2);
+      const alvo = doc.elementFromPoint(x, y) || doc.body;
+
+      const base = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        button: 0,
+        buttons: 1,
+        detail: 1,
+        // o Cesium chama setPointerCapture(pointerId); sem os campos o
+        // navegador lanca NotFoundError e o clique se perde
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+        width: 1,
+        height: 1,
+        pressure: 0.5,
+        view: globalThis,
+      };
+      const semBotao = { ...base, buttons: 0 };
+
+      // pointer* primeiro (e' o que camadas modernas escutam), depois mouse*
+      const disparar = (el, tipo, opts) => {
+        try {
+          if (tipo.startsWith('pointer')) el.dispatchEvent(new PointerEvent(tipo, opts));
+          else el.dispatchEvent(new MouseEvent(tipo, opts));
+        } catch {
+          /* PointerEvent indisponivel: cai no mouse */
+          try { el.dispatchEvent(new MouseEvent(tipo.replace('pointer', 'mouse'), opts)); } catch { /* noop */ }
+        }
+      };
+
+      for (const el of [alvo, doc]) {
+        disparar(el, 'pointerdown', base);
+        disparar(el, 'mousedown', base);
+        disparar(el, 'pointerup', semBotao);
+        disparar(el, 'mouseup', semBotao);
+        disparar(el, 'click', semBotao);
+      }
+
+      return {
+        ok: true,
+        action: name,
+        x,
+        y,
+        alvo: alvo?.tagName + (alvo?.id ? `#${alvo.id}` : ''),
+      };
+    }
+
     // ── Street View pelo centro da tela (toque duplo no ESP) ────────────
     if (name === 'open_street_view') {
       const sl = streetLevelLayer || globalThis.__GEV_STREET_LEVEL__ || null;

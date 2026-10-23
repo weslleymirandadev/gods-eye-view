@@ -514,6 +514,18 @@ wss.on("connection", (ws) => {
       console.log("[voice] gravando...");
     } else if (type === 0x02) {
       if (pcm) pcm.push(data.subarray(1));
+    } else if (type === 0x05) {
+      // TOQUE SIMPLES: clique no centro da tela (a mira). Serve pra escolher
+      // o que esta sob o pontinho vermelho, como um mouse.
+      console.log("[voice] comando: clique no centro da tela");
+      try {
+        const actions = [{ name: "click_at_crosshair", args: {} }];
+        const res = await runActions(actions);
+        ws.send(JSON.stringify({ ok: true, command: "click", actions, result: res }));
+      } catch (e) {
+        console.error("[voice] clique erro:", e.message);
+        ws.send(JSON.stringify({ ok: false, error: e.message }));
+      }
     } else if (type === 0x04) {
       // TOQUE DUPLO no ESP: comando de street view no centro da tela.
       // Nao ha audio; so decide e manda a acao pro globo.
