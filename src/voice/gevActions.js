@@ -313,6 +313,8 @@ export function createGevActionRunner({
   const _layerEnabledAt = new Map();
   // elemento que recebeu o pointerdown do drag
   let dragAlvo = null;
+  // posicao acumulada do ponteiro durante o arrasto
+  let dragPos = null;
   let analystEngine;
   const resolveRegionRing = (name, signal) =>
     annotationResolver.resolveRegionRingForQuery(name, signal, placeSearch);
@@ -1036,6 +1038,7 @@ export function createGevActionRunner({
 
       if (pressionar) {
         dragAlvo = alvo;
+        dragPos = { x, y };
         for (const el of [alvo, doc]) {
           disp(el, 'pointerdown', opts);
           disp(el, 'mousedown', opts);
@@ -1047,6 +1050,7 @@ export function createGevActionRunner({
           disp(el, 'mouseup', opts);
         }
         dragAlvo = null;
+        dragPos = null;
       }
       return { ok: true, action: name, x, y, alvo: alvo?.tagName };
     }
@@ -1057,8 +1061,20 @@ export function createGevActionRunner({
       if (!doc || !dragAlvo) return { ok: false, action: name, error: 'not dragging' };
       const dx = Number(rawArgs?.dx) || 0;
       const dy = Number(rawArgs?.dy) || 0;
-      const x = Math.round(globalThis.innerWidth / 2);
-      const y = Math.round(globalThis.innerHeight / 2);
+      // Posicao ACUMULADA: o Cesium calcula a rotacao pelo movimento do
+      // ponteiro entre eventos, entao cada move tem que partir de onde o
+      // anterior parou (senao o globo treme em vez de girar).
+      if (dragPos === null) {
+        const r = dragAlvo.getBoundingClientRect?.() || { left: 0, top: 0, width: globalThis.innerWidth, height: globalThis.innerHeight };
+        dragPos = {
+          x: Math.round(r.left + r.width / 2),
+          y: Math.round(r.top + r.height / 2),
+        };
+      }
+      dragPos.x += dx;
+      dragPos.y += dy;
+      const x = dragPos.x;
+      const y = dragPos.y;
       const opts = {
         bubbles: true, cancelable: true, composed: true,
         clientX: x + dx, clientY: y + dy, screenX: x + dx, screenY: y + dy,

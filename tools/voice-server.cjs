@@ -514,6 +514,16 @@ wss.on("connection", (ws) => {
       console.log("[voice] gravando...");
     } else if (type === 0x02) {
       if (pcm) pcm.push(data.subarray(1));
+    } else if (type === 0x07) {
+      // MOVIMENTO do arrasto (giroscopio): dx/dy em pixels (int16 LE).
+      if (data.length < 5) return;
+      const dx = data.readInt16LE(1);
+      const dy = data.readInt16LE(3);
+      try {
+        await runActions([{ name: "pointer_move_crosshair", args: { dx, dy } }]);
+      } catch (e) {
+        console.error("[voice] move erro:", e.message);
+      }
     } else if (type === 0x06) {
       // DRAG: pressiona/solta o mouse no centro da tela. Enquanto pressionado,
       // o movimento do giroscopio (futuro) arrasta o viewer.
