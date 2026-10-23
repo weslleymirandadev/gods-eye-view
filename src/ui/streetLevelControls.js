@@ -595,6 +595,11 @@ export class StreetLevelControls {
       setProp(wrap, 'hidden', !viewer.open);
     }
     if (!viewer.open && this.isViewerExpanded()) this.setViewerExpanded(false);
+    // Abrir uma imagem leva o painel para tela cheia (por cima do Cesium):
+    // num display de 240px o painel de 288x180 e ilegivel.
+    if (viewer.open && !this.isViewerExpanded() && !this._expandRequestedByUser) {
+      this.setViewerExpanded(true);
+    }
     setProp(el.viewerPlaceholder, 'hidden', !viewer.loading);
     if (el.followBtn) {
       setAttr(el.followBtn, 'aria-pressed', String(viewer.follow.pressed));
