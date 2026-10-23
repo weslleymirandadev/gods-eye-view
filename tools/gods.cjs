@@ -35,13 +35,46 @@ function up(url) {
   } catch { return "000"; }
 }
 
-function killPids() {
-  if (!fs.existsSync(PIDFILE)) return;
-  const pids = fs.readFileSync(PIDFILE, "utf-8").split(/\s+/).filter(Boolean);
+/** PIDs escutando numa porta TCP (Windows netstat). */
+function pidsNaPorta(porta) {
+  const out = [];
+  try {
+    const txt = execSync("netstat -ano -p TCP", { stdio: ["ignore", "pipe", "ignore"] }).toString();
+    for (const line of txt.split(/\r?\n/)) {
+      if (!line.includes(`:${porta} `) || !/LISTENING/i.test(line)) continue;
+      const pid = line.trim().split(/\s+/).pop();
+      if (pid && /^\d+$/.test(pid) && !out.includes(pid)) out.push(pid);
+    }
+  } catch {}
+  return out;
+}
+
+function matar(pids, rotulo) {
   for (const p of pids) {
-    try { execSync(`taskkill /PID ${p} /F /T`, { stdio: "ignore" }); } catch {}
+    try {
+      execSync(`taskkill /PID ${p} /F /T`, { stdio: "ignore" });
+      console.log(`  matei ${rotulo} (pid ${p})`);
+    } catch {}
   }
-  fs.unlinkSync(PIDFILE);
+}
+
+/**
+ * Derruba tudo de verdade: o PID file pode faltar (processo subiu por fora,
+ * ou o arquivo foi apagado) e ai o `gods` acha que ainda esta no ar porque
+ * a porta responde. Aqui matamos o que estiver escutando nas nossas portas.
+ */
+function killPids() {
+  // 1) o que o proprio gods registrou
+  if (fs.existsSync(PIDFILE)) {
+    const pids = fs.readFileSync(PIDFILE, "utf-8").split(/\s+/).filter(Boolean);
+    matar(pids, "registrado");
+    try { fs.unlinkSync(PIDFILE); } catch {}
+  }
+  // 2) o que estiver segurando as portas (vite/capture/voice)
+  for (const [rotulo, porta] of [["vite", PORT], ["capture", CAPTURE], ["voice", VOICE]]) {
+    const pids = pidsNaPorta(porta);
+    if (pids.length) matar(pids, `${rotulo} :${porta}`);
+  }
 }
 
 function start(name, cmd, args, cwd) {
@@ -79,7 +112,15 @@ function main() {
 
   // ja rodando? evita duplicar
   if (up("http://127.0.0.1:4173/") === "200") {
+    const registrado = fs.existsSync(PIDFILE);
     console.log("gods: ja esta rodando (use `gods stop` pra derrubar).");
+    if (!registrado) {
+      const pids = pidsNaPorta(PORT);
+      console.log(
+        `  AVISO: o vite esta no ar (pid ${pids.join(", ") || "?"}) mas nao foi` +
+        " iniciado por este comando. `gods stop` tambem derruba ele.",
+      );
+    }
     console.log(`  celular: http://${lanIP()}:${PORT}`);
     return;
   }
