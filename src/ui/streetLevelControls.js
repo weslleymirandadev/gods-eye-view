@@ -146,7 +146,16 @@ export class StreetLevelControls {
     this.listen(el.followBtn, 'click', () => {
       this.layer.setFollow?.(!(this._state?.street?.follow === true));
     });
-    this.listen(el.viewerClose, 'click', () => this.layer.closeViewer?.());
+    this.listen(el.viewerClose, 'click', async () => {
+      // Pede ao app para recarregar o Cesium ANTES de fechar o panorama.
+      // Sem isto o globo reaparece vazio por um instante.
+      try {
+        await this.actions.resumeCesiumBeforeClose?.();
+      } catch {
+        /* segue e fecha mesmo assim */
+      }
+      this.layer.closeViewer?.();
+    });
     this.listen(el.viewerExpand, 'click', () =>
       this.setViewerExpanded(!this.isViewerExpanded(), { dock: true }),
     );

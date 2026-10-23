@@ -16,6 +16,7 @@ import { CockpitCoordinator } from './cockpitCoordinator.js';
 import { ContextControls } from './context.js';
 import { CctvControls } from './cctv.js';
 import { StreetLevelControls } from './streetLevelControls.js';
+import { createCesiumStreetViewSwitch } from '../app/cesiumStreetViewSwitch.js';
 import { RadioControls } from './radio.js';
 import { LocalSdrControls } from './localSdrControls.js';
 import { LocationNavigation } from './locationNavigation.js';
@@ -947,10 +948,38 @@ export class StyleManager extends ShellFacade {
       subscribeHandoff: (listener) =>
         this._navigation.subscribeCameraHandoff(listener),
     });
+    // Troca de contexto: pausa o Cesium quando o panorama abre e recarrega
+    // o globo ANTES de fechar (ver app/cesiumStreetViewSwitch.js).
+    this._cesiumSwitch?.resumeNow?.();
+    this._cesiumSwitch = createCesiumStreetViewSwitch({
+      viewer: this.viewer,
+      holdRender: null,
+      releaseRender: null,
+      requestRender: () => this.viewer?.scene?.requestRender?.(),
+    });
+    let svAberto = false;
+    this._streetLevelSwitchUnsub?.();
+    this._streetLevelSwitchUnsub = streetLevelLayer.subscribe?.((ui) => {
+      const aberto = ui?.street?.open === true;
+      if (aberto === svAberto) return;
+      svAberto = aberto;
+      if (aberto) {
+        // panorama abriu: congela o globo
+        this._cesiumSwitch.pause();
+      } else {
+        // fechou: o Cesium volta; nao precisa esperar aqui (ja desenhou
+        // enquanto o painel fechava por conta do proprio close)
+        this._cesiumSwitch.resumeNow();
+      }
+    }) || null;
+
     this._streetLevelControls = new StreetLevelControls({
       root: this._streetLevelPanel,
       layer: streetLevelLayer,
       actions: {
+        // Chamado ao fechar o panorama: o Cesium volta e desenha ANTES
+        // de o painel sair (ver app/cesiumStreetViewSwitch.js).
+        resumeCesiumBeforeClose: () => this._cesiumSwitch?.resumeBeforeClosing?.() ?? true,
         isEnabled: () => this._dataManager?.isEnabled('street-level') === true,
         setEnabled: (enabled) =>
           this._dataManager?.setEnabled('street-level', enabled, {
@@ -1586,6 +1615,9 @@ export class StyleManager extends ShellFacade {
     this._clearLayersControl?.destroy();
     this._cctvControls?.destroy();
     this.services?.streetLevelLayer?.attachNavigation?.(null);
+    this._streetLevelSwitchUnsub?.();
+    this._streetLevelSwitchUnsub = null;
+    this._cesiumSwitch?.resumeNow?.();
     this._streetLevelControls?.destroy();
     this._radioControls?.destroy();
     this._localSdrControls?.destroy();
