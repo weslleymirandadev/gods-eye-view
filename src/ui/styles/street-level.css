@@ -636,3 +636,29 @@ button.sl-status:focus-visible {
     min-height: 0;
   }
 }
+
+/* ── Panorama em tela cheia ─────────────────────────────────────────────
+   app/cesiumStreetViewSwitch.js poe #sl-viewer em position:fixed/inset:0
+   (inline, com !important). Aqui so tiramos da frente o que atrapalha:
+   a barra de ferramentas, o X, a legenda e a UI do proprio app. */
+html.gev-panorama .sl-viewer-bar,
+html.gev-panorama .sl-image-meta,
+html.gev-panorama .sl-viewer-placeholder,
+html.gev-panorama #sl-viewer-expand,
+html.gev-panorama #sl-viewer-close,
+html.gev-panorama #sl-follow-btn {
+  display: none !important;
+}
+
+html.gev-panorama .command-dock,
+html.gev-panorama #command-dock,
+html.gev-panorama #intel-hud,
+html.gev-panorama #orbit-indicator,
+html.gev-panorama #key-setup-chip,
+html.gev-panorama #cesium-credits,
+html.gev-panorama #loading-screen,
+html.gev-panorama .gev-screen-whiteboard,
+html.gev-panorama #street-level-panel,
+html.gev-panorama .panel-rail {
+  display: none !important;
+}

@@ -1,4 +1,10 @@
   <div id="cesiumContainer"></div>
+  <!-- O panorama vive no mesmo nivel do #cesiumContainer: e' o unico jeito de
+       ficar por cima dele. O Cesium e' position:absolute filho do <body> e
+       abre o proprio contexto de camada, entao um elemento dentro do painel
+       lateral nunca aparece na frente. Nasce vazio e escondido; o
+       app/cesiumStreetViewSwitch.js move o #sl-viewer pra ca. -->
+  <div id="gev-panorama-host" hidden></div>
   <div id="world-overlay-root" aria-hidden="true">
     <canvas id="world-overlay-canvas"></canvas>
   </div>

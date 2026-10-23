@@ -943,6 +943,8 @@ export class StyleManager extends ShellFacade {
     // O runner de voz (gevActions) alcanca a camada por esta global: ela nao
     // esta no contexto que o tools.js recebe.
     globalThis.__GEV_STREET_LEVEL__ = streetLevelLayer;
+    // Usada pelo switch Cesium<->StreetView ao expandir/recolher o painel.
+    globalThis.__GEV_SL_VIEWER_RESIZE__ = () => streetLevelLayer.resizeViewer?.();
     // Photo framing and FOLLOW release tracking like any explicit flight.
     streetLevelLayer.attachNavigation?.({
       run: (noun, move) => this._runExplicitNavigation(noun, move),
@@ -959,6 +961,12 @@ export class StyleManager extends ShellFacade {
       holdRender: null,
       releaseRender: null,
       requestRender: () => this.viewer?.scene?.requestRender?.(),
+      // Avisa o provider que o container mudou de tamanho: sem isso o canvas
+      // do Google continua desenhando em 288x180 dentro da tela cheia.
+      onResize: () => {
+        streetLevelLayer.resizeViewer?.();
+        globalThis.__GEV_SL_VIEWER_RESIZE__?.();
+      },
     });
     let svAberto = false;
     this._streetLevelSwitchUnsub?.();
@@ -967,8 +975,11 @@ export class StyleManager extends ShellFacade {
       if (aberto === svAberto) return;
       svAberto = aberto;
       if (aberto) {
-        // panorama abriu: congela o globo
+        // panorama abriu: congela o globo e leva o viewer pra tela cheia.
+        // Um tick depois: o provider ainda esta montando o canvas dele.
         this._cesiumSwitch.pause();
+        setTimeout(() => this._cesiumSwitch?.refreshFullscreen?.(), 600);
+        setTimeout(() => this._cesiumSwitch?.refreshFullscreen?.(), 2000);
       } else {
         // fechou: o Cesium volta; nao precisa esperar aqui (ja desenhou
         // enquanto o painel fechava por conta do proprio close)
