@@ -940,6 +940,9 @@ export class StyleManager extends ShellFacade {
     this._streetLevelControls?.destroy();
     this._streetLevelControls = null;
     if (!this._streetLevelPanel || !streetLevelLayer) return;
+    // O runner de voz (gevActions) alcanca a camada por esta global: ela nao
+    // esta no contexto que o tools.js recebe.
+    globalThis.__GEV_STREET_LEVEL__ = streetLevelLayer;
     // Photo framing and FOLLOW release tracking like any explicit flight.
     streetLevelLayer.attachNavigation?.({
       run: (noun, move) => this._runExplicitNavigation(noun, move),
