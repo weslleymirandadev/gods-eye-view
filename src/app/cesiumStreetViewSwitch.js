@@ -3,11 +3,11 @@
  *
  * Regras (pedido do usuario):
  *
- *   ABRIR street view  -> o canvas do Cesium fica INVISIVEL e o render loop
- *                         para (nao gasta GPU; o globo nao aparece atras).
+ *   ABRIR street view  -> pausa o render do Cesium (nao gasta GPU enquanto
+ *                         o panorama esta aberto).
  *
  *   FECHAR street view -> PRIMEIRO volta o Cesium e garante que ele desenhou
- *                         um frame; SO DEPOIS o panorama fecha.
+ *                         um frame; SO DEPOIS fecha o panorama.
  *
  * Sem isso o globo reaparece vazio (ou com o tile antigo) por um instante
  * enquanto o Cesium rebuilda a cena.
@@ -23,37 +23,10 @@ export function createCesiumStreetViewSwitch({
   requestRender,
 } = {}) {
   let paused = false;
-  let backdrop = null;
 
   /** true se o Cesium esta congelado agora. */
   function isPaused() {
     return paused;
-  }
-
-  function canvas() {
-    return viewer?.scene?.canvas || viewer?.canvas || null;
-  }
-
-  /** Esconde o canvas do Cesium atras de um fundo solido. */
-  function showBackdrop() {
-    if (backdrop || typeof document === "undefined") return;
-    const el = document.createElement("div");
-    el.id = "gev-cesium-backdrop";
-    el.style.cssText = [
-      "position: fixed",
-      "inset: 0",
-      "z-index: 140", // abaixo do painel expandido (141)
-      "background: #05070a",
-      "pointer-events: none",
-    ].join(";");
-    document.body.appendChild(el);
-    backdrop = el;
-  }
-
-  function hideBackdrop() {
-    if (!backdrop) return;
-    backdrop.remove();
-    backdrop = null;
   }
 
   /**
@@ -64,20 +37,13 @@ export function createCesiumStreetViewSwitch({
     if (paused) return;
     paused = true;
     try {
-      // Congela o render loop: nada de GPU enquanto o panorama esta aberto.
+      // Congela o render loop e limpa o que estava na tela nao e necessario:
+      // o canvas fica escondido por CSS enquanto o painel esta aberto.
       viewer?.scene && (viewer.scene.requestRenderMode = true);
       viewer.useDefaultRenderLoop = false;
     } catch {
       /* viewer destruido */
     }
-    // Esconde o globo: o painel do street view cobre a tela, mas se ele for
-    // menor (mobile) o Cesium nao pode aparecer atras.
-    const c = canvas();
-    if (c) {
-      c.dataset.gevPrevVisibility = c.style.visibility || "";
-      c.style.visibility = "hidden";
-    }
-    showBackdrop();
   }
 
   /**
@@ -88,12 +54,6 @@ export function createCesiumStreetViewSwitch({
     if (!paused) return true;
     paused = false;
 
-    const c = canvas();
-    if (c) {
-      c.style.visibility = c.dataset.gevPrevVisibility || "";
-      delete c.dataset.gevPrevVisibility;
-    }
-
     try {
       viewer.useDefaultRenderLoop = true;
     } catch {
@@ -102,7 +62,6 @@ export function createCesiumStreetViewSwitch({
 
     // Pede frames ate o canvas ter conteudo (ou estourar o timeout).
     const done = await waitForDrawnFrame(viewer, timeoutMs);
-    hideBackdrop();
     return done;
   }
 
@@ -110,18 +69,12 @@ export function createCesiumStreetViewSwitch({
   function resumeNow() {
     if (!paused) return;
     paused = false;
-    const c = canvas();
-    if (c) {
-      c.style.visibility = c.dataset.gevPrevVisibility || "";
-      delete c.dataset.gevPrevVisibility;
-    }
     try {
       viewer.useDefaultRenderLoop = true;
       viewer?.scene?.requestRender?.();
     } catch {
       /* viewer destruido */
     }
-    hideBackdrop();
   }
 
   return { pause, resumeBeforeClosing, resumeNow, isPaused };
