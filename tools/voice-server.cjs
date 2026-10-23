@@ -37,6 +37,7 @@ const CAPTURE_URL = arg("capture", "http://127.0.0.1:8082");
 const PY = arg("python", ".venv/Scripts/python.exe");
 const ROOT = path.join(__dirname, "..");
 const WORK = path.join(ROOT, ".voice-tmp");
+const SAMPLE_RATE = 16000;   // o ESP manda 16kHz mono 16-bit
 const CAPTURES = path.join(ROOT, "captures");
 const KEEP = 5;                       // ultimos N audios
 
@@ -279,28 +280,54 @@ function pickCandidate(query, cands) {
   };
 }
 
+// O Photon resolveu sem ambiguidade? Se sim, economizamos uma chamada Gemini
+// (a cota free e' 1500/dia e cada comando ja gasta 1 no audio).
+//
+// Criterio: 1o resultado e' pais/cidade/estado, o nome casa com a query, e
+// nao existe outro lugar com o MESMO nome em outro pais (homonimo).
+function photonConfiavel(query, cands) {
+  if (!cands.length) return false;
+  const q = String(query || "").toLowerCase().trim();
+  const c = cands[0];
+  const nome = String(c.name || "").toLowerCase();
+
+  const tipoForte = ["country", "city", "state"].includes(String(c.type || "").toLowerCase());
+  const nomeCasa = nome === q || (nome.length >= 3 && q.includes(nome)) || q.startsWith(nome);
+  if (!tipoForte || !nomeCasa) return false;
+
+  const homonimos = cands.filter(
+    (x) => String(x.name || "").toLowerCase() === nome && x.country && x.country !== c.country,
+  );
+  return homonimos.length === 0;
+}
+
 async function refineActions(text, calls, apiKey) {
   for (const a of calls) {
     const q = a.name === "fly_to_location" && String(a.args?.query || "").trim();
     if (!q || a.args.locationId) continue;
     try {
-      // 1o: Gemini resolve o lugar com contexto (acerta homonimos:
-      // "Colombo, Parana" vs Colombo do Sri Lanka).
       let v = null;
-      try {
-        const g = await stt.geocode(q);
-        v = { ok: true, lat: g.lat, lon: g.lon, label: g.label };
-        console.log(`[voice] gemini-geo "${q}" -> ${g.label} @ ${g.lat?.toFixed(2)},${g.lon?.toFixed(2)}`);
-      } catch (e) {
-        console.warn(`[voice] gemini-geo falhou (${e.message}); usando photon`);
+
+      // 1o: Photon. Se for inequivoco, pronto (economiza a cota do Gemini).
+      const cands = await geocode(q);
+      if (photonConfiavel(q, cands)) {
+        v = pickCandidate(q, cands);
+        console.log(`[voice] photon "${q}" -> ${v.label} @ ${v.lat?.toFixed(2)},${v.lon?.toFixed(2)}`);
       }
 
-      // 2o: fallback = Photon + escolha local
+      // 2o: ambiguo -> Gemini decide com contexto (homonimos, enderecos).
       if (!v) {
-        const cands = await geocode(q);
-        if (!cands.length) { console.log(`[voice] geocode "${q}" sem candidatos`); continue; }
-        v = pickCandidate(q, cands);
+        try {
+          const g = await stt.geocode(q);
+          v = { ok: true, lat: g.lat, lon: g.lon, label: g.label };
+          console.log(`[voice] gemini-geo "${q}" -> ${g.label} @ ${g.lat?.toFixed(2)},${g.lon?.toFixed(2)}`);
+        } catch (e) {
+          console.warn(`[voice] gemini-geo falhou (${e.message}); usando photon`);
+          if (cands.length) v = pickCandidate(q, cands);
+        }
       }
+
+      if (!v) { console.log(`[voice] geocode "${q}" sem resultado`); continue; }
 
       if (v.ok) {
         a.args.query = v.label || a.args.query;
@@ -499,6 +526,17 @@ wss.on("connection", (ws) => {
       recent.unshift(entry);
       recent.splice(KEEP); pruneCaptures(); saveRecent();
       console.log(`[voice] audio: ${audio.length} bytes -> ${file}`);
+
+      // ignora toques acidentais / cliques: menos de ~0.35s de fala nao tem
+      // comando nenhum e so gastaria cota do Gemini.
+      const MIN_BYTES = Math.floor(SAMPLE_RATE * 2 * 0.35);
+      if (audio.length < MIN_BYTES) {
+        console.log(`[voice] audio curto (${audio.length} < ${MIN_BYTES}), ignorado`);
+        entry.error = "audio curto";
+        saveRecent();
+        ws.send(JSON.stringify({ ok: false, reason: "audio curto" }));
+        return;
+      }
 
       try {
         // 1o: Gemini escuta o audio e ja escolhe a acao (1 chamada so).
