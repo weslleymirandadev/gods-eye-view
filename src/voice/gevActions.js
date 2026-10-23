@@ -311,6 +311,8 @@ export function createGevActionRunner({
     ? { ...SPEECH_BUILDERS, ...speechBuilders }
     : SPEECH_BUILDERS;
   const _layerEnabledAt = new Map();
+  // elemento que recebeu o pointerdown do drag
+  let dragAlvo = null;
   let analystEngine;
   const resolveRegionRing = (name, signal) =>
     annotationResolver.resolveRegionRingForQuery(name, signal, placeSearch);
@@ -994,6 +996,86 @@ export function createGevActionRunner({
         y,
         alvo: alvo?.tagName + (alvo?.id ? `#${alvo.id}` : ''),
       };
+    }
+
+    // ── DRAG: pressiona/solta o mouse no centro (giroscopio vira movimento) ──
+    if (name === 'pointer_down_crosshair' || name === 'pointer_up_crosshair') {
+      const doc = globalThis.document;
+      if (!doc) return { ok: false, action: name, error: 'no document' };
+      const pressionar = name === 'pointer_down_crosshair';
+      const x = Math.round(globalThis.innerWidth / 2);
+      const y = Math.round(globalThis.innerHeight / 2);
+      const alvo = doc.elementFromPoint(x, y) || doc.body;
+
+      const opts = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        button: 0,
+        buttons: pressionar ? 1 : 0,
+        detail: 1,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+        width: 1,
+        height: 1,
+        pressure: pressionar ? 0.5 : 0,
+        view: globalThis,
+      };
+
+      const disp = (el, tipo, o) => {
+        try {
+          if (tipo.startsWith('pointer')) el.dispatchEvent(new PointerEvent(tipo, o));
+          else el.dispatchEvent(new MouseEvent(tipo, o));
+        } catch { /* noop */ }
+      };
+
+      if (pressionar) {
+        dragAlvo = alvo;
+        for (const el of [alvo, doc]) {
+          disp(el, 'pointerdown', opts);
+          disp(el, 'mousedown', opts);
+        }
+      } else {
+        for (const el of [dragAlvo, doc]) {
+          if (!el) continue;
+          disp(el, 'pointerup', opts);
+          disp(el, 'mouseup', opts);
+        }
+        dragAlvo = null;
+      }
+      return { ok: true, action: name, x, y, alvo: alvo?.tagName };
+    }
+
+    // ── Movimento do drag (o giroscopio vai chamar isto) ────────────────
+    if (name === 'pointer_move_crosshair') {
+      const doc = globalThis.document;
+      if (!doc || !dragAlvo) return { ok: false, action: name, error: 'not dragging' };
+      const dx = Number(rawArgs?.dx) || 0;
+      const dy = Number(rawArgs?.dy) || 0;
+      const x = Math.round(globalThis.innerWidth / 2);
+      const y = Math.round(globalThis.innerHeight / 2);
+      const opts = {
+        bubbles: true, cancelable: true, composed: true,
+        clientX: x + dx, clientY: y + dy, screenX: x + dx, screenY: y + dy,
+        button: 0, buttons: 1, pointerId: 1, pointerType: 'mouse',
+        isPrimary: true, pressure: 0.5, view: globalThis,
+      };
+      const disp = (el, tipo, o) => {
+        try {
+          if (tipo.startsWith('pointer')) el.dispatchEvent(new PointerEvent(tipo, o));
+          else el.dispatchEvent(new MouseEvent(tipo, o));
+        } catch { /* noop */ }
+      };
+      for (const el of [dragAlvo, doc]) {
+        disp(el, 'pointermove', opts);
+        disp(el, 'mousemove', opts);
+      }
+      return { ok: true, action: name, dx, dy };
     }
 
     // ── Street View pelo centro da tela (toque duplo no ESP) ────────────

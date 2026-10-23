@@ -514,6 +514,21 @@ wss.on("connection", (ws) => {
       console.log("[voice] gravando...");
     } else if (type === 0x02) {
       if (pcm) pcm.push(data.subarray(1));
+    } else if (type === 0x06) {
+      // DRAG: pressiona/solta o mouse no centro da tela. Enquanto pressionado,
+      // o movimento do giroscopio (futuro) arrasta o viewer.
+      const pressionar = data.length > 1 && data[1] === 1;
+      console.log(`[voice] drag ${pressionar ? "PRESS" : "RELEASE"}`);
+      try {
+        const actions = [
+          { name: pressionar ? "pointer_down_crosshair" : "pointer_up_crosshair", args: {} },
+        ];
+        const res = await runActions(actions);
+        ws.send(JSON.stringify({ ok: true, command: pressionar ? "drag-start" : "drag-end", actions, result: res }));
+      } catch (e) {
+        console.error("[voice] drag erro:", e.message);
+        ws.send(JSON.stringify({ ok: false, error: e.message }));
+      }
     } else if (type === 0x05) {
       // TOQUE SIMPLES: clique no centro da tela (a mira). Serve pra escolher
       // o que esta sob o pontinho vermelho, como um mouse.
