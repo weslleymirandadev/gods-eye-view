@@ -1,5 +1,4 @@
 import { createStreetLevelLayer } from '../../layers/streetLevel/index.js';
-import { createMapillaryProvider } from '../../layers/streetLevel/providers/mapillary/index.js';
 import { createGoogleProvider } from '../../layers/streetLevel/providers/google/index.js';
 import * as sprites from '../../data/spriteOrder.js';
 import * as picking from '../../data/pickRegistry.js';
@@ -10,11 +9,10 @@ import * as render from '../../renderGovernor.js';
 /** The browser Maps key the scene was started with (src/app/scene.js). */
 const googleApiKey = () => globalThis.window?.__GOOGLE_MAPS_API_KEY__ || null;
 
-/** Mapillary and Google Street View, once the Mapillary source is supplied; else none. */
+/** Google Street View apenas. O Mapillary foi desativado (cobertura fraca no
+ *  Brasil e o usuario so quer o Google). */
 function defaultProviders(sources) {
-  if (sources.mapillary == null) return [];
   return [
-    createMapillaryProvider({ source: sources.mapillary }),
     createGoogleProvider({ getApiKey: googleApiKey }),
   ];
 }
