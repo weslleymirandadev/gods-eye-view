@@ -1,21 +1,26 @@
 /**
- * Cliente do servidor STT persistente (_stt_server.py).
- * Mantem UM processo Python com o modelo carregado e transcreve sob demanda.
- * Isso elimina os ~1.5s de carga do modelo por gravacao.
+ * Cliente dos servidores Python persistentes.
+ *
+ *  - STT (Whisper): um processo com o modelo carregado, transcreve sob demanda.
+ *  - Gemini: um processo que atende analyze / geocode / choose pelo stdin.
+ *
+ * Manter os processos vivos evita abrir uma janela de console (e pagar a
+ * carga do modelo) a cada comando.
  */
 const { spawn } = require("child_process");
-const path = require("path");
 
-class SttClient {
-  constructor({ python, script, model = "base", language = "pt", geminiScript = null, geminiModel = "gemini-3.5-flash-lite" } = {}) {
+const HIDE = process.platform === "win32" ? true : false;
+
+/** Um processo Python conversando por linhas JSON no stdin/stdout. */
+class PyWorker {
+  constructor({ python, script, env = {}, onReady = null, label = "py" }) {
     this.python = python;
     this.script = script;
-    this.model = model;
-    this.language = language;
-    this.geminiScript = geminiScript;
-    this.geminiModel = geminiModel;
+    this.env = env;
+    this.onReady = onReady;
+    this.label = label;
     this.proc = null;
-    this.queue = [];      // promessas aguardando resposta
+    this.queue = [];
     this.buf = "";
     this.ready = false;
   }
@@ -23,8 +28,9 @@ class SttClient {
   start() {
     if (this.proc) return;
     this.proc = spawn(this.python, [this.script], {
-      env: { ...process.env, STT_MODEL: this.model, STT_LANGUAGE: this.language },
+      env: { ...process.env, ...this.env },
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: HIDE,
     });
     this.proc.stdout.on("data", (d) => {
       this.buf += d.toString();
@@ -35,115 +41,37 @@ class SttClient {
         if (!line) continue;
         let msg;
         try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.ready) { this.ready = true; console.log(`[stt] modelo pronto (${msg.model})`); continue; }
+        if (msg.ready) {
+          this.ready = true;
+          if (this.onReady) this.onReady(msg);
+          continue;
+        }
         const pending = this.queue.shift();
         if (pending) pending(msg);
       }
     });
     this.proc.stderr.on("data", (d) => {
       const s = d.toString().trim();
-      if (s && !/^\s*$/.test(s)) console.error("[stt]", s.slice(0, 200));
+      if (s) console.error(`[${this.label}]`, s.slice(0, 200));
     });
     this.proc.on("exit", (code) => {
-      console.log(`[stt] processo saiu (${code})`);
-      this.proc = null; this.ready = false;
-      // rejeita quem estava esperando
-      while (this.queue.length) this.queue.shift()({ ok: false, error: "stt caiu" });
+      this.proc = null;
+      this.ready = false;
+      while (this.queue.length) this.queue.shift()({ ok: false, error: `${this.label} caiu (${code})` });
     });
   }
 
-  /** Manda o WAV pro Gemini: devolve { text, actions } numa chamada so. */
-  analyze(wavPath, timeoutMs = 90000) {
-    return new Promise((resolve, reject) => {
-      const g = spawn(this.python, [this.geminiScript], {
-        env: { ...process.env, GEMINI_MODEL: this.geminiModel },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let out = "", err = "";
-      const timer = setTimeout(() => { try { g.kill(); } catch {} reject(new Error("gemini timeout")); }, timeoutMs);
-      g.stdout.on("data", (d) => (out += d.toString()));
-      g.stderr.on("data", (d) => (err += d.toString()));
-      g.on("close", () => {
-        clearTimeout(timer);
-        const lines = out.trim().split("\n").filter(Boolean);
-        const last = lines[lines.length - 1];
-        if (!last) return reject(new Error("gemini sem resposta: " + err.slice(0, 200)));
-        try {
-          const msg = JSON.parse(last);
-          if (!msg.ok) return reject(new Error(msg.error || "gemini falhou"));
-          resolve({ text: msg.text || "", actions: msg.actions || [], ms: msg.ms });
-        } catch (e) { reject(new Error("gemini json: " + last.slice(0, 150))); }
-      });
-      g.stdin.write(JSON.stringify({ wav: wavPath }) + "\n");
-      g.stdin.end();
-    });
-  }
-
-  /** Resolve um nome de lugar em coordenadas (Gemini). */
-  geocode(query, timeoutMs = 45000) {
-    return new Promise((resolve, reject) => {
-      const g = spawn(this.python, [this.geminiScript], {
-        env: { ...process.env, GEMINI_MODEL: this.geminiModel },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let out = "", err = "";
-      const timer = setTimeout(() => { try { g.kill(); } catch {} reject(new Error("gemini geocode timeout")); }, timeoutMs);
-      g.stdout.on("data", (d) => (out += d.toString()));
-      g.stderr.on("data", (d) => (err += d.toString()));
-      g.on("close", () => {
-        clearTimeout(timer);
-        const lines = out.trim().split("\n").filter(Boolean);
-        const last = lines[lines.length - 1];
-        if (!last) return reject(new Error("geocode sem resposta: " + err.slice(0, 120)));
-        try {
-          const msg = JSON.parse(last);
-          if (!msg.ok) return reject(new Error(msg.reason || msg.error || "geocode falhou"));
-          resolve(msg);
-        } catch (e) { reject(new Error("geocode json: " + last.slice(0, 100))); }
-      });
-      g.stdin.write(JSON.stringify({ geocode: query }) + "\n");
-      g.stdin.end();
-    });
-  }
-
-  /** Escolhe a acao a partir de um texto (Gemini, sem audio). */
-  choose(text, timeoutMs = 60000) {
-    return new Promise((resolve, reject) => {
-      const g = spawn(this.python, [this.geminiScript], {
-        env: { ...process.env, GEMINI_MODEL: this.geminiModel },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let out = "", err = "";
-      const timer = setTimeout(() => { try { g.kill(); } catch {} reject(new Error("gemini timeout")); }, timeoutMs);
-      g.stdout.on("data", (d) => (out += d.toString()));
-      g.stderr.on("data", (d) => (err += d.toString()));
-      g.on("close", () => {
-        clearTimeout(timer);
-        const lines = out.trim().split("\n").filter(Boolean);
-        const last = lines[lines.length - 1];
-        if (!last) return reject(new Error("gemini sem resposta: " + err.slice(0, 150)));
-        try {
-          const msg = JSON.parse(last);
-          if (!msg.ok) return reject(new Error(msg.error || "gemini falhou"));
-          resolve(msg.actions || []);
-        } catch (e) { reject(new Error("gemini json: " + last.slice(0, 120))); }
-      });
-      g.stdin.write(JSON.stringify({ text }) + "\n");
-      g.stdin.end();
-    });
-  }
-
-  /** Transcreve um WAV. Retorna o texto. */
-  transcribe(wavPath, timeoutMs = 60000) {
+  /** Envia um comando e espera a próxima resposta. */
+  send(cmd, timeoutMs = 90000) {
     this.start();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("stt timeout")), timeoutMs);
+      const timer = setTimeout(() => reject(new Error(`${this.label} timeout`)), timeoutMs);
       this.queue.push((msg) => {
         clearTimeout(timer);
-        if (msg.ok) resolve(msg.text || "");
-        else reject(new Error(msg.error || "stt falhou"));
+        if (msg.ok === false) return reject(new Error(msg.error || msg.reason || `${this.label} falhou`));
+        resolve(msg);
       });
-      this.proc.stdin.write(JSON.stringify({ wav: wavPath }) + "\n");
+      this.proc.stdin.write(JSON.stringify(cmd) + "\n");
     });
   }
 
@@ -152,4 +80,61 @@ class SttClient {
   }
 }
 
-module.exports = { SttClient };
+class SttClient {
+  constructor({
+    python,
+    script,
+    model = "base",
+    language = "pt",
+    geminiScript = null,
+    geminiModel = "gemini-3.5-flash-lite",
+  } = {}) {
+    this.python = python;
+    this.geminiModel = geminiModel;
+
+    this.stt = new PyWorker({
+      python, script,
+      env: { STT_MODEL: model, STT_LANGUAGE: language },
+      label: "stt",
+      onReady: (m) => console.log(`[stt] modelo pronto (${m.model})`),
+    });
+
+    this.gemini = geminiScript
+      ? new PyWorker({
+          python, script: geminiScript,
+          env: { GEMINI_MODEL: geminiModel },
+          label: "gemini",
+          onReady: (m) => console.log(`[gemini] pronto (${m.model || geminiModel})`),
+        })
+      : null;
+  }
+
+  start() { this.stt.start(); if (this.gemini) this.gemini.start(); }
+  stop() { this.stt.stop(); if (this.gemini) this.gemini.stop(); }
+
+  /** Transcreve um WAV com Whisper. */
+  async transcribe(wavPath, timeoutMs = 90000) {
+    const msg = await this.stt.send({ wav: wavPath }, timeoutMs);
+    return msg.text || "";
+  }
+
+  /** Gemini escuta o WAV e devolve { text, actions }. */
+  async analyze(wavPath, timeoutMs = 90000) {
+    const msg = await this.gemini.send({ wav: wavPath }, timeoutMs);
+    return { text: msg.text || "", actions: msg.actions || [], ms: msg.ms };
+  }
+
+  /** Gemini resolve um nome de lugar em coordenadas. */
+  async geocode(query, timeoutMs = 45000) {
+    const msg = await this.gemini.send({ geocode: query }, timeoutMs);
+    return { lat: msg.lat, lon: msg.lon, label: msg.label, confianca: msg.confianca };
+  }
+
+  /** Gemini escolhe a ação a partir de um texto já transcrito. */
+  async choose(text, timeoutMs = 60000) {
+    const msg = await this.gemini.send({ text }, timeoutMs);
+    return msg.actions || [];
+  }
+}
+
+module.exports = { SttClient, PyWorker };

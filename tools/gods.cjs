@@ -47,7 +47,7 @@ function killPids() {
 function start(name, cmd, args, cwd) {
   const child = spawn(cmd, args, {
     cwd, detached: true, stdio: "ignore",
-    windowsHide: false,
+    windowsHide: true,   // sem janela de console por filho
   });
   child.unref();
   return child.pid;
@@ -100,9 +100,9 @@ function main() {
   }
   if (!ok) console.log("  [aviso] vite demorou; seguindo mesmo assim");
 
-  // 2) capture-server (abre o Chrome)
+  // 2) capture-server (abre o Chrome no PC com o globo)
   pids.push(start("capture", node, ["tools/esp-capture-server.cjs", "--port", String(CAPTURE), "--size", "240"], ROOT));
-  console.log("  [2/3] capture (video)...");
+  console.log("  [2/3] capture (video, Chrome no PC)...");
 
   // 3) voice-server
   pids.push(start("voice", node, ["tools/voice-server.cjs", "--port", String(VOICE)], ROOT));
@@ -119,7 +119,7 @@ function main() {
   console.log("  ------------------------------------------------");
   console.log(`  PC       : http://localhost:${PORT}`);
   console.log(`  CELULAR  : http://${ip}:${PORT}          (app completo)`);
-  console.log(`  CELULAR  : http://${ip}:${PORT}/?embed=1  (so o globo, = display)`);
+  console.log(`  CELULAR  : http://${ip}:${PORT}/?embed=1  (so o globo)`);
   console.log(`  VOZ/mic  : http://localhost:${VOICE}/mic`);
   console.log("  ------------------------------------------------");
   console.log("  parar    : gods stop");
