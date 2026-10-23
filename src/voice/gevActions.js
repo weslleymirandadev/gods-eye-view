@@ -302,6 +302,7 @@ export function createGevActionRunner({
   searchNavigation = searchAndFlyTo,
   speechBuilders = null,
   deixis = null,
+  streetLevelLayer = null,
 }) {
   // Voice enable times and analyst follow-up memory belong to this runner.
   // Speech builders turn results into say/display envelopes; callers extend
@@ -929,6 +930,78 @@ export function createGevActionRunner({
             count: layer.stats?.count || 0,
           })),
       };
+    }
+
+    // ── Street View pelo centro da tela (toque duplo no ESP) ────────────
+    if (name === 'open_street_view') {
+      const sl = streetLevelLayer || globalThis.__GEV_STREET_LEVEL__ || null;
+      if (!sl) {
+        return { ok: false, action: name, error: 'Street Level unavailable' };
+      }
+
+      // 1) liga a camada (varias vezes e idempotente; as vezes a primeira
+      //    chamada volta ok mas o estado nao persiste)
+      for (let i = 0; i < 3; i++) {
+        dataManager?.setEnabled?.('street-level', true, { origin: 'user' });
+        await new Promise((r) => setTimeout(r, 350));
+        if (sl.getUIState?.()?.enabled) break;
+      }
+
+      // 2) liga o provider (Google vem com defaultOn:false)
+      try {
+        const st = sl.getUIState?.();
+        for (const prov of st?.providers || []) {
+          if (!prov.on) sl.setProviderEnabled?.(prov.id, true);
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      } catch (e) {
+        console.warn('[voice] setProviderEnabled:', e?.message);
+      }
+
+      // 3) procura a imagem mais proxima.
+      //    Primeiro pelo centro da tela (a mira). Se a camera estiver alta o
+      //    centro cai longe da rua, entao tentamos tambem o centro da VIEW,
+      //    que usa o alvo da camera.
+      const querAim = rawArgs?.aim === 'view' ? 'view' : 'screen-centre';
+      const tentativas = querAim === 'screen-centre'
+        ? ['screen-centre', 'view']
+        : ['view', 'screen-centre'];
+      let opened = false;
+      let usado = null;
+      let ultimoErro = null;
+      for (const a of tentativas) {
+        for (let t = 1; t <= 2 && !opened; t++) {
+          try {
+            opened = (await sl.openNearest?.(undefined, { frame: false, aim: a })) !== false;
+            if (opened) usado = a;
+          } catch (e) {
+            console.warn(`[voice] openNearest ${a} try${t}:`, e?.message);
+          }
+          if (!opened) {
+            ultimoErro = sl.getUIState?.()?.street?.error || ultimoErro;
+            await new Promise((r) => setTimeout(r, 600));
+          }
+        }
+        if (opened) break;
+      }
+      const st2 = sl.getUIState?.();
+      return {
+        ok: opened,
+        action: name,
+        aim: usado || querAim,
+        enabled: st2?.enabled === true,
+        open: st2?.street?.open === true,
+        error: opened ? null : (ultimoErro || 'no panorama near the target'),
+      };
+    }
+
+    if (name === 'close_street_view') {
+      const sl = streetLevelLayer || globalThis.__GEV_STREET_LEVEL__ || null;
+      if (!sl) {
+        return { ok: false, action: name, error: 'Street Level unavailable' };
+      }
+      await sl.closeViewer?.();
+      return { ok: true, action: name };
     }
 
     if (name === 'fly_to_location') {

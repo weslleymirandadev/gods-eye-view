@@ -503,6 +503,7 @@ server.listen(PORT, "0.0.0.0", () => {
 wss.on("connection", (ws) => {
   console.log("[voice] ESP conectado");
   let pcm = null;
+  let streetViewAberto = false;
 
   ws.on("message", async (data) => {
     if (data.length < 1) return;
@@ -513,6 +514,24 @@ wss.on("connection", (ws) => {
       console.log("[voice] gravando...");
     } else if (type === 0x02) {
       if (pcm) pcm.push(data.subarray(1));
+    } else if (type === 0x04) {
+      // TOQUE DUPLO no ESP: comando de street view no centro da tela.
+      // Nao ha audio; so decide e manda a acao pro globo.
+      console.log("[voice] comando: toque duplo (street view)");
+      try {
+        const ativa = !streetViewAberto;
+        streetViewAberto = ativa;
+        // open_street_view ja liga a camada e o provider por dentro.
+        const actions = ativa
+          ? [{ name: "open_street_view", args: { aim: "screen-centre" } }]
+          : [{ name: "close_street_view", args: {} }];
+        const res = await runActions(actions);
+        ws.send(JSON.stringify({ ok: true, command: ativa ? "street-on" : "street-off", actions, result: res }));
+        console.log(`[voice] street view ${ativa ? "ABRIR" : "FECHAR"} ->`, JSON.stringify(res));
+      } catch (e) {
+        console.error("[voice] comando erro:", e.message);
+        ws.send(JSON.stringify({ ok: false, error: e.message }));
+      }
     } else if (type === 0x03) {
       if (!pcm || !pcm.length) { ws.send(JSON.stringify({ ok: false, reason: "sem audio" })); return; }
       const audio = Buffer.concat(pcm); pcm = null;
