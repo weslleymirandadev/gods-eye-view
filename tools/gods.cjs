@@ -49,6 +49,38 @@ function pidsNaPorta(porta) {
   return out;
 }
 
+/**
+ * Mata SO o Chrome do capture (Puppeteer).
+ *
+ * Identifica pelos processos cujo command line carrega o marker
+ * --gev-capture ou o userDataDir dedicado. NUNCA `taskkill /IM chrome.exe`:
+ * isso derrubaria tambem o Chrome normal do usuario.
+ */
+function killCaptureChrome() {
+  // wmic foi removido em versoes novas do Windows; PowerShell com -EncodedCommand
+  // evita TODO o inferno de escape de aspas.
+  const script = [
+    "Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\"",
+    "| Where-Object { $_.CommandLine -like '*--gev-capture*' -or $_.CommandLine -like '*gev-capture-chrome*' }",
+    "| ForEach-Object { $_.ProcessId }",
+  ].join(" ");
+  let alvos = [];
+  try {
+    const b64 = Buffer.from(script, "utf16le").toString("base64");
+    const saida = execSync(`powershell -NoProfile -EncodedCommand ${b64}`, {
+      stdio: ["ignore", "pipe", "ignore"],
+    }).toString();
+    alvos = saida.split(/\s+/).map((x) => x.trim()).filter((x) => /^\d+$/.test(x));
+  } catch {
+    /* powershell indisponivel */
+  }
+  if (!alvos.length) {
+    console.log("  (nenhum Chrome de capture rodando)");
+    return;
+  }
+  matar(alvos, "chrome do capture");
+}
+
 function matar(pids, rotulo) {
   for (const p of pids) {
     try {
@@ -91,7 +123,7 @@ function main() {
 
   if (action === "stop") {
     killPids();
-    try { execSync("taskkill /IM chrome.exe /F", { stdio: "ignore" }); } catch {}
+    killCaptureChrome();
     console.log("gods: parado.");
     return;
   }

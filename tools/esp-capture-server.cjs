@@ -18,6 +18,7 @@
  */
 const http = require("http");
 const os = require("os");
+const path = require("path");
 const puppeteer = require("puppeteer");
 const sharp = require("sharp");
 const { WebSocketServer } = require("ws");
@@ -55,15 +56,23 @@ function localIP() {
   return "127.0.0.1";
 }
 
+// Perfil proprio do Puppeteer: com userDataDir dedicado o Chrome do projeto
+// tem um diretorio exclusivo, entao da pra identifica-lo e mata-lo sem tocar
+// no Chrome normal do usuario (que usa o perfil padrao).
+const CAPTURE_PROFILE = path.join(os.tmpdir(), "gev-capture-chrome");
+
 async function startBrowser() {
   console.log("[cap] abrindo Chromium HEADED (GPU real)...");
   browser = await puppeteer.launch({
     headless: false,                            // <- JANELA REAL: usa a GPU
+    userDataDir: CAPTURE_PROFILE,               // perfil isolado (ver acima)
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--window-size=" + VIEW_SIZE + "," + VIEW_SIZE,
       "--window-position=0,0",
+      // marcador no command line: o `gods stop` procura por essa string
+      "--gev-capture",
     ],
   });
   page = await browser.newPage();
