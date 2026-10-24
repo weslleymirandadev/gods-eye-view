@@ -523,6 +523,20 @@ wss.on("connection", (ws) => {
       console.log("[voice] gravando...");
     } else if (type === 0x02) {
       if (pcm) pcm.push(data.subarray(1));
+    } else if (type === 0x08) {
+      // ZOOM: [0x08][1=IN|2=OUT][1=press|0=release]
+      if (data.length < 3) return;
+      const dir = data[1] === 1 ? "in" : "out";
+      const press = data[2] === 1;
+      console.log(`[zoom] ${dir} ${press ? "PRESS" : "RELEASE"}`);
+      try {
+        await runActions([{
+          name: press ? "zoom_start" : "zoom_stop",
+          args: { direction: dir },
+        }]);
+      } catch (e) {
+        console.error("[zoom] erro:", e.message);
+      }
     } else if (type === 0x07) {
       // MOVIMENTO do arrasto (giroscopio): dx/dy em pixels (int16 LE).
       if (data.length < 5) return;

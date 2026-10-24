@@ -882,6 +882,61 @@ const schemas = [
       },
     },
   },
+  {
+    name: 'zoom_start',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        direction: { type: 'string', enum: ['in', 'out'] },
+      },
+    },
+  },
+  {
+    name: 'zoom_stop',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        direction: { type: 'string', enum: ['in', 'out'] },
+      },
+    },
+  },
+  {
+    name: 'click_at_crosshair',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'pointer_down_crosshair',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'pointer_up_crosshair',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'pointer_move_crosshair',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        dx: { type: 'number' },
+        dy: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'open_street_view',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { aim: { type: 'string', enum: ['screen-centre', 'view'] } },
+    },
+  },
+  {
+    name: 'close_street_view',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
 ];
 
 function freeze(value) {

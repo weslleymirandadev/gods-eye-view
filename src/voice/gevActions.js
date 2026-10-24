@@ -46,6 +46,7 @@ import { unavailablePlaceSearch } from '../search/placeSearch.js';
 import * as defaultAnnotationResolver from '../annotations/annotationResolver.js';
 import { normalizeRadioCountryInput } from '../data/radioCountry.js';
 import { TR3B_CLASS } from '../data/tr3bRegistry.js';
+import { startContinuousZoom, stopContinuousZoom as stopZoom, continuousZoomState } from '../app/continuousZoom.js';
 
 const ALLOWED_STYLES = new Set([
   'normal',
@@ -330,6 +331,22 @@ export function createGevActionRunner({
   initCameraVerbs(viewer, getViewTargetCartesian);
   // Nested calls (select_nearest_aircraft composing layer + flight) use the
   // raw runner; only the outer call gets a voice envelope.
+
+  // Zoom continuo: o ajuste usa adjustOrbitRange quando a orbita esta ativa,
+  // senao move a camera em fracao da altitude (funciona no globo e no chao).
+  let zoomAtivo = false;
+  function zoomStart(dir) {
+    // A orbita ativa precisa ajustar o RAIO (senao o lookAt desfaz o zoom).
+    zoomAtivo = startContinuousZoom(dir, {
+      viewer,
+      adjust: (factor) => adjustOrbitRange(factor),
+    });
+  }
+  function zoomStop() {
+    zoomAtivo = false;
+    stopZoom();
+  }
+
   const runGevAction = async function runGevAction(
     name,
     rawArgs = {},
@@ -941,6 +958,20 @@ export function createGevActionRunner({
     // Pegamos o elemento que esta SOB o centro da viewport e disparamos a
     // sequencia completa de eventos nele (e no document, pra handlers
     // globais como o pick do Cesium).
+    // ── ZOOM CONTINUO (botoes segurados no ESP) ─────────────────────────
+    // Estilo Unity: comeca devagar e ACELERA enquanto durar o press, ate um
+    // teto. Soltar para o zoom e zera a aceleracao. Aplicado por frame
+    // (rAF), entao a transicao e' gradual em vez de um salto seco.
+    if (name === 'zoom_start' || name === 'zoom_stop') {
+      const dir = String(rawArgs?.direction || 'in').toLowerCase() === 'out' ? 'out' : 'in';
+      if (name === 'zoom_stop') {
+        zoomStop();
+        return { ok: true, action: name, direction: dir, state: continuousZoomState() };
+      }
+      zoomStart(dir);
+      return { ok: true, action: name, direction: dir, state: continuousZoomState() };
+    }
+
     if (name === 'click_at_crosshair') {
       const doc = viewer?.scene?.canvas?.ownerDocument || globalThis.document;
       if (!doc) return { ok: false, action: name, error: 'no document' };
