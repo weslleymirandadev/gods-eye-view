@@ -71,8 +71,11 @@ async function startBrowser() {
       "--disable-setuid-sandbox",
       "--window-size=" + VIEW_SIZE + "," + VIEW_SIZE,
       "--window-position=0,0",
-      // marcador no command line: o `gods stop` procura por essa string
-      "--gev-capture",
+      // `gods stop` identifica o Chrome do capture pelo userDataDir dedicado
+      // (CAPTURE_PROFILE) — NAO usamos flag inventada: argumento desconhecido
+      // faz o Chrome abortar depois de alguns frames.
+      "--disable-dev-shm-usage",   // evita crash de /dev/shm em sessoes longas
+      "--disable-gpu-watchdog",    // captura longa dispara o watchdog -> "Target closed"
     ],
   });
   page = await browser.newPage();
@@ -157,6 +160,32 @@ async function applyView() {
   console.log("[cap] view-applied:", JSON.stringify(res).slice(0, 180));
 }
 
+// --------------------------- recuperacao ---------------------------
+// Reabre o Chromium quando a pagina/aba morre (usuario fechou a janela,
+// crash da GPU, devtools desconectado). Enquanto isso, ninguem manda frame:
+// um screenshot falho produz buffer vazio e o ESP corrompe o display.
+let recovering = null;
+
+async function recoverBrowser() {
+  if (recovering) return recovering;   // uma tentativa por vez
+  recovering = (async () => {
+    console.log("[cap] recuperando o Chromium...");
+    try { await browser?.close(); } catch { /* ja morto */ }
+    browser = null;
+    page = null;
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      await startBrowser();
+      console.log("[cap] Chromium recuperado");
+    } catch (e) {
+      console.error("[cap] falha ao recuperar:", e.message.slice(0, 120));
+    } finally {
+      recovering = null;
+    }
+  })();
+  return recovering;
+}
+
 // --------------------------- capture loop ---------------------------
 async function captureLoop() {
   while (running) {
@@ -164,12 +193,25 @@ async function captureLoop() {
     try {
       // screenshot JPEG (ja e JPEG) -> envia DIRETO (o ESP decodifica em hw)
       // ~10KB por frame em vez de 115KB RGB565
+      if (!page) { await new Promise((r) => setTimeout(r, 500)); continue; }
       const jpg = await page.screenshot({ type: "jpeg", quality: 75 });
+      // um JPEG valido minimo tem ~200 bytes; menos que isso e' lixo e o ESP
+      // nao consegue decodificar (e reinicia o painel)
+      if (!jpg || jpg.length < 200) {
+        console.warn(`[cap] frame invalido (${jpg?.length || 0}B) - descartado`);
+        continue;
+      }
       frameBuf = jpg;         // sem conversao
       frameCount++;
       if ((frameCount % SKIP) === 0) broadcast();
     } catch (e) {
       console.error("[cap] erro:", e.message.slice(0, 120));
+      // Page/Chrome morreu: reabre. Sem isto o loop segue "capturando" um
+      // screenshot que falha e mandando frame velho/truncado pro ESP — que
+      // decodifica lixo, corrompe o display e reinicia o painel.
+      if (/Session closed|Target closed|Protocol error|detached/i.test(e.message)) {
+        await recoverBrowser();
+      }
     }
     captureMs = Date.now() - t0;
     const wait = FRAME_MS - captureMs;

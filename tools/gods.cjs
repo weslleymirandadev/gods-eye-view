@@ -61,7 +61,7 @@ function killCaptureChrome() {
   // evita TODO o inferno de escape de aspas.
   const script = [
     "Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\"",
-    "| Where-Object { $_.CommandLine -like '*--gev-capture*' -or $_.CommandLine -like '*gev-capture-chrome*' }",
+    "| Where-Object { $_.CommandLine -like '*gev-capture-chrome*' }",
     "| ForEach-Object { $_.ProcessId }",
   ].join(" ");
   let alvos = [];
