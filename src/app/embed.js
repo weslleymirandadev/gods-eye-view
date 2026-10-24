@@ -14,6 +14,7 @@
 import * as Cesium from 'cesium';
 import { announceNavigationAuthority } from '../navigationPolicy.js';
 import { annotationsFromParams, createView } from '../view/index.js';
+import { installImuSensitivitySlider } from './imuSlider.js';
 
 export const EMBED_VIEW_MESSAGE = 'gev:view';
 export const EMBED_APPLIED_MESSAGE = 'gev:view-applied';
@@ -243,6 +244,14 @@ export function installViews({
 
   windowRef.document.body.classList.add('ui-embed');
   shell.setCleanView?.(true);
+  // Slider do giroscopio flutuando sobre o globo (so no embed, que e' o que
+  // o ESP mostra). Muda a sensibilidade no servidor sem recompilar o firmware.
+  const removeSlider = installImuSensitivitySlider({
+    doc: windowRef.document,
+    signal,
+  });
+  if (typeof removeSlider === 'function' && signal)
+    signal.addEventListener('abort', removeSlider, { once: true });
   const stopRendering = isEmbeddedInline()
     ? keepPanelRendering(viewer, { windowRef })
     : () => {};

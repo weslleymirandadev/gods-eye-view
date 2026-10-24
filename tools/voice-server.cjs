@@ -143,6 +143,12 @@ Responda SEMPRE chamando ferramentas quando fizer sentido; so responda em texto 
 // Modelo PERSISTENTE: um processo Python fica com o modelo carregado,
 // eliminando a recarga (~1.5s) por gravacao.
 const { SttClient } = require("./stt-client.cjs");
+
+// Sensibilidade do giroscopio: px por grau, ajustavel em runtime pelo
+// slider em /imu (nao precisa recompilar o ESP).
+let imuSens = 0.4;
+let imuMaxStep = 40;
+
 const STT_MODEL = arg("stt", process.env.STT_MODEL || "base");
 const STT_LANGUAGE = arg("lang", process.env.STT_LANGUAGE || "pt");
 const stt = new SttClient({
@@ -397,6 +403,90 @@ function pruneCaptures() {
 }
 
 // ----------------------------- HTML -----------------------------
+
+/** Pagina de calibracao: um slider que muda a sensibilidade AO VIVO. */
+function imuPage() {
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IMU — sensibilidade</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center;
+         background:#05070a; color:#d8e6f0;
+         font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .box { width:min(520px,92vw); padding:28px; border-radius:14px;
+         background:#0b1016; border:1px solid #1d2b38; }
+  h1 { margin:0 0 4px; font-size:13px; letter-spacing:.18em;
+       text-transform:uppercase; color:#6f8a9e; font-weight:600; }
+  .val { font-size:44px; font-weight:700; color:#38e07b; letter-spacing:-.02em; }
+  .val small { font-size:13px; color:#6f8a9e; font-weight:400; margin-left:6px; }
+  input[type=range] { width:100%; margin:22px 0 8px; accent-color:#38e07b; height:26px; }
+  .row { display:flex; justify-content:space-between; font-size:11px;
+         color:#4d6373; letter-spacing:.08em; }
+  .hint { margin-top:22px; padding-top:16px; border-top:1px solid #1d2b38;
+          font-size:11.5px; color:#5d7486; line-height:1.8; }
+  kbd { background:#16202b; border:1px solid #26333f; border-radius:4px;
+        padding:1px 6px; font-size:11px; color:#8fa8bb; }
+  button { margin-top:14px; width:100%; padding:10px; border-radius:8px;
+           background:#16202b; color:#a8c0d2; border:1px solid #26333f;
+           font:inherit; cursor:pointer; }
+  button:hover { border-color:#38e07b; color:#38e07b; }
+</style></head><body>
+<div class="box">
+  <h1>Sensibilidade do giroscópio</h1>
+  <div class="val"><span id="v">0.40</span><small>px por grau</small></div>
+  <input id="s" type="range" min="0.05" max="8" step="0.05" value="0.4">
+  <div class="row"><span>0.05 (lento)</span><span>8.00 (rápido)</span></div>
+  <button id="reset">Voltar ao padrão (0.40)</button>
+  <div class="hint">
+    Mexa a cabeça durante o <b>drag</b> (clique + segurar no touch).<br>
+    O valor vai pro servidor na hora — sem recompilar o ESP.<br><br>
+    Passo máximo por amostra: <span id="ms">40</span> px
+  </div>
+</div>
+<script>
+const s = document.getElementById('s');
+const v = document.getElementById('v');
+const ms = document.getElementById('ms');
+let t = null;
+
+async function carrega() {
+  try {
+    const r = await fetch('/imu.json');
+    const j = await r.json();
+    s.value = j.sens;
+    v.textContent = Number(j.sens).toFixed(2);
+    ms.textContent = j.maxStep;
+  } catch {}
+}
+
+async function envia() {
+  const sens = Number(s.value);
+  v.textContent = sens.toFixed(2);
+  try {
+    const r = await fetch('/imu', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sens }),
+    });
+    const j = await r.json();
+    ms.textContent = j.maxStep;
+  } catch {}
+}
+
+s.addEventListener('input', () => {
+  v.textContent = Number(s.value).toFixed(2);
+  clearTimeout(t);
+  t = setTimeout(envia, 120);   // debounce: nao martela o servidor
+});
+document.getElementById('reset').addEventListener('click', () => {
+  s.value = 0.4;
+  envia();
+});
+carrega();
+</script></body></html>`;
+}
+
 function page() {
   const rows = recent.map((r) => `
     <article class="card">
@@ -484,6 +574,43 @@ const server = http.createServer((req, res) => {
     }
     return;
   }
+  // ── Calibracao do giroscopio (slider no /imu) ──────────────────────────
+  // O app roda em :4173 e o voice em :8083: sem CORS o slider nao consegue
+  // ler/escrever a sensibilidade.
+  if (url.startsWith("/imu")) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+  }
+  if (req.method === "GET" && url === "/imu.json") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ sens: imuSens, maxStep: imuMaxStep }));
+    return;
+  }
+  if (req.method === "POST" && url === "/imu") {
+    let body = "";
+    req.on("data", (c) => { body += c; if (body.length > 4096) req.destroy(); });
+    req.on("end", () => {
+      try {
+        const j = JSON.parse(body || "{}");
+        if (typeof j.sens === "number" && Number.isFinite(j.sens))
+          imuSens = Math.max(0.01, Math.min(50, j.sens));
+        if (typeof j.maxStep === "number" && Number.isFinite(j.maxStep))
+          imuMaxStep = Math.max(1, Math.min(500, Math.round(j.maxStep)));
+        console.log(`[imu] sensibilidade = ${imuSens} px/grau (passo max ${imuMaxStep})`);
+      } catch { /* body invalido */ }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, sens: imuSens, maxStep: imuMaxStep }));
+    });
+    return;
+  }
+  if (req.method === "GET" && (url === "/imu" || url === "/imu/")) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(imuPage());
+    return;
+  }
+
   if (req.method === "POST" && url === "/mic/reset") {
     recent.length = 0;
     pruneCaptures(); saveRecent();
@@ -517,8 +644,13 @@ wss.on("connection", (ws) => {
     } else if (type === 0x07) {
       // MOVIMENTO do arrasto (giroscopio): dx/dy em pixels (int16 LE).
       if (data.length < 5) return;
-      const dx = data.readInt16LE(1);
-      const dy = data.readInt16LE(3);
+      // o ESP manda centesimos de grau; a escala vive aqui
+      const cDegX = data.readInt16LE(1);
+      const cDegY = data.readInt16LE(3);
+      const lim = imuMaxStep;
+      const dx = Math.max(-lim, Math.min(lim, Math.round((cDegX / 100) * imuSens)));
+      const dy = Math.max(-lim, Math.min(lim, Math.round((cDegY / 100) * imuSens)));
+      if (dx === 0 && dy === 0) return;
       try {
         await runActions([{ name: "pointer_move_crosshair", args: { dx, dy } }]);
       } catch (e) {
