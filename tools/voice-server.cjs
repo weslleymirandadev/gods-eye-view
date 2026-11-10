@@ -143,6 +143,7 @@ Responda SEMPRE chamando ferramentas quando fizer sentido; so responda em texto 
 // Modelo PERSISTENTE: um processo Python fica com o modelo carregado,
 // eliminando a recarga (~1.5s) por gravacao.
 const { SttClient } = require("./stt-client.cjs");
+const tts = require("./tts.cjs");
 
 // Sensibilidade do giroscopio: px por grau, ajustavel em runtime pelo
 // slider em /imu (nao precisa recompilar o ESP).
@@ -467,6 +468,37 @@ fs.mkdirSync(CAPTURES, { recursive: true });
 loadRecent();
 const apiKey = loadKey();
 
+// ── Audio de volta pro ESP (MAX98357A) ────────────────────────────────────
+// Opcode 0x09 = chunk PCM 16k mono; 0x0A = fim. O socket do ESP e' o ultimo
+// que conectou; se cair, sendSpeech simplesmente nao faz nada.
+let espSocket = null;
+const AUDIO_CHUNK = 2048 * 2;   // 2048 amostras por frame (4 KB)
+
+function sendSpeech(text) {
+  if (!espSocket || espSocket.readyState !== 1) return 0;
+  let pcm;
+  try {
+    pcm = tts.synthesizePcm(text);
+  } catch (e) {
+    console.error("[tts] falhou:", e.message);
+    return 0;
+  }
+  if (!pcm.length) return 0;
+
+  let chunks = 0;
+  const rateHeader = Buffer.alloc(2);
+  rateHeader.writeUInt16LE(tts.SAMPLE_RATE, 0);   // o ESP reconfigura o I2S
+  for (let off = 0; off < pcm.length; off += AUDIO_CHUNK) {
+    const parte = pcm.subarray(off, Math.min(pcm.length, off + AUDIO_CHUNK));
+    const frame = Buffer.concat([Buffer.from([0x09]), rateHeader, parte]);
+    espSocket.send(frame, { binary: true });
+    chunks++;
+  }
+  espSocket.send(Buffer.from([0x0A]), { binary: true });
+  console.log(`[tts] ${text.slice(0, 40)} -> ${chunks} chunks (${(pcm.length / 2 / 16000).toFixed(2)}s)`);
+  return chunks;
+}
+
 const server = http.createServer((req, res) => {
   const url = (req.url || "").split("?")[0];
 
@@ -500,6 +532,26 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ ok: true }));
     return;
   }
+  // Fala um texto no MAX98357A do ESP. Testa o amplificador sem passar pela IA:
+  //   curl -X POST :8083/say -d '{"text":"teste"}'
+  if (req.method === "POST" && url === "/say") {
+    let body = "";
+    req.on("data", (c) => { body += c; if (body.length > 4096) req.destroy(); });
+    req.on("end", () => {
+      let text = "";
+      try { text = JSON.parse(body || "{}").text || ""; } catch { /* corpo invalido */ }
+      if (!text) text = new URLSearchParams(body).get("text") || "";
+      if (!text.trim()) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, reason: "text vazio" }));
+        return;
+      }
+      const enviados = sendSpeech(text);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: enviados > 0, chunks: enviados, text }));
+    });
+    return;
+  }
   res.writeHead(200, { "Content-Type": "text/plain" });
   res.end(`voice-server up. /mic -> ultimos ${KEEP} audios.\n`);
 });
@@ -511,6 +563,8 @@ server.listen(PORT, "0.0.0.0", () => {
 
 wss.on("connection", (ws) => {
   console.log("[voice] ESP conectado");
+  espSocket = ws;   // destino do audio de volta (MAX98357A)
+  ws.on("close", () => { if (espSocket === ws) espSocket = null; });
   let pcm = null;
   let streetViewAberto = false;
 
